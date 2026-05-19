@@ -16,7 +16,7 @@ export function Footer({ inverted = false }: { inverted?: boolean }) {
         <div className="grid gap-16 md:grid-cols-12">
           <div className="md:col-span-7">
             <p className={`text-xs uppercase tracking-[0.2em] ${muted}`}>
-              © Index — フッター
+              © Index
             </p>
             <h2 className="mt-6 font-display text-4xl leading-[0.95] tracking-tight md:text-6xl">
               Let&rsquo;s build something
@@ -99,7 +99,7 @@ export function Footer({ inverted = false }: { inverted?: boolean }) {
                   </a>
                 </li>
                 <li>
-                  <span className={mutedStrong}>London → Anywhere</span>
+                  <span className={mutedStrong}>UK → Anywhere</span>
                 </li>
               </ul>
             </div>
@@ -114,7 +114,7 @@ export function Footer({ inverted = false }: { inverted?: boolean }) {
 
         <div className={`mt-10 flex flex-col items-start justify-between gap-4 border-t ${border} pt-6 text-xs ${muted} md:flex-row md:items-center`}>
           <p>© {year} Salekh Ventures. All rights reserved.</p>
-          <p>Built with intent — ビルト</p>
+          <p>Built with intent</p>
         </div>
       </div>
     </footer>

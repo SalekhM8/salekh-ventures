@@ -8,7 +8,7 @@ export function Hero() {
   return (
     <section className="relative flex min-h-screen flex-col justify-between overflow-hidden px-6 pb-10 pt-32 md:px-10 md:pt-40">
       <div className="grid grid-cols-3 items-baseline text-xs uppercase tracking-[0.2em] text-muted">
-        <span>© Salekh Ventures — ベンチャーズ</span>
+        <span>© Salekh Ventures</span>
         <span className="text-center">(WDX® — 01)</span>
         <span className="text-right">Index</span>
       </div>
@@ -22,7 +22,7 @@ export function Hero() {
             Shipped in Weeks,
           </RevealText>
           <RevealText as="span" className="block" delay={0.2}>
-            Built to Last <span className="italic text-muted-2">イメージ</span>.
+            Built to Last.
           </RevealText>
         </h1>
       </div>

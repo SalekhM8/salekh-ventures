@@ -10,7 +10,7 @@ export default function ContactPage() {
   return (
     <section className="px-6 pb-24 pt-40 md:px-10 md:pb-40 md:pt-48">
       <div className="grid grid-cols-3 items-baseline text-xs uppercase tracking-[0.2em] text-black/60">
-        <span>© Get in touch — コンタクト</span>
+        <span>© Get in touch</span>
         <span className="text-center">(WDX® — Contact)</span>
         <span className="text-right">Salekh Ventures</span>
       </div>
@@ -42,7 +42,7 @@ export default function ContactPage() {
               <p className="text-xs uppercase tracking-[0.2em] text-black/50">
                 Based in
               </p>
-              <p className="mt-2 text-base">London — working anywhere</p>
+              <p className="mt-2 text-base">United Kingdom — working anywhere</p>
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-black/50">

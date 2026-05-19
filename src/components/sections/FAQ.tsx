@@ -9,7 +9,7 @@ export function FAQ() {
   return (
     <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
       <div className="grid grid-cols-3 items-baseline text-xs uppercase tracking-[0.2em] text-muted">
-        <span>© Help Center — ヘルプ</span>
+        <span>© Help Center</span>
         <span className="text-center">(WDX® — 10)</span>
         <span className="text-right">Clarifications</span>
       </div>

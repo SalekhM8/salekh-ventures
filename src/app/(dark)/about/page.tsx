@@ -12,7 +12,7 @@ export default function AboutPage() {
     <>
       <section className="px-6 pb-24 pt-40 md:px-10 md:pb-40 md:pt-48">
         <SectionHeader
-          left="© About — アバウト"
+          left="© About"
           center="(WDX® — Profile)"
           right="Salekh"
         />

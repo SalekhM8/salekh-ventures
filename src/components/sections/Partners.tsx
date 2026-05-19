@@ -9,7 +9,7 @@ export function Partners() {
     <section className="border-t border-white/5 py-24 md:py-40">
       <div className="px-6 md:px-10">
         <SectionHeader
-          left="© Partners — パートナー"
+          left="© Partners"
           center="(WDX® — 07)"
           right="Trusted by"
         />

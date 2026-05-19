@@ -11,7 +11,7 @@ export function Journal() {
   return (
     <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
-        left="© Journal — ジャーナル"
+        left="© Journal"
         center="(WDX® — 09)"
         right="Notes"
       />

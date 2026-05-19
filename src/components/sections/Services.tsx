@@ -9,7 +9,7 @@ export function Services() {
   return (
     <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
-        left="© Capabilities — サービス内容"
+        left="© Capabilities"
         center="(WDX® — 04)"
         right="What we do"
       />

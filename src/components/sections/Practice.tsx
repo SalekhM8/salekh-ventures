@@ -22,7 +22,7 @@ export function Practice() {
       className="relative border-t border-white/5 px-6 py-32 md:px-10 md:py-56"
     >
       <div className="grid grid-cols-3 items-baseline text-xs uppercase tracking-[0.2em] text-muted">
-        <span>© Practice — プラクティス</span>
+        <span>© Practice</span>
         <span className="text-center">(WDX® — 05)</span>
         <span className="text-right">Experience</span>
       </div>
