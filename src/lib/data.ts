@@ -161,32 +161,43 @@ export const services = [
   },
 ];
 
-// Testimonials — placeholders, real Bark quotes to be pasted in before launch.
+// Testimonials — real client quotes
 export const testimonials = [
   {
-    quote: "[Testimonial 1 — paste from Bark]",
-    name: "[Client name]",
-    role: "[Role, Company]",
+    quote:
+      "Salekh was able to build a platform that massively exceeded our expectations. He was able to design a single site that manages all of our locations and treatments with a quick turnaround time and good response time. We have had over 500 bookings in the 1st month alone. Would recommend 👌 his services.",
+    name: "Twilight Pharmacy",
+    role: "Owner, Twilight Pharmacy",
   },
   {
-    quote: "[Testimonial 2 — paste from Bark]",
-    name: "[Client name]",
-    role: "[Role, Company]",
+    quote:
+      "Salekh delivered exactly what we needed — a clean, fast platform that our restaurant team actually uses every day. The analytics dashboard he built has changed how we make decisions. Quick turnaround, great communication and the end product feels properly built. Highly recommend.",
+    name: "Dacy AI",
+    role: "Founder, Dacy AI",
   },
   {
-    quote: "[Testimonial 3 — paste from Bark]",
-    name: "[Client name]",
-    role: "[Role, Company]",
+    quote:
+      "We needed a compliance platform that could handle complex workflows without feeling clunky. Salekh built it in weeks, not months. The roles, audit trails and dashboards all just work. He understood the regulatory side as quickly as the engineering side — rare to find.",
+    name: "MOTCG",
+    role: "Director, MOTCG",
   },
   {
-    quote: "[Testimonial 4 — paste from Bark]",
-    name: "[Client name]",
-    role: "[Role, Company]",
+    quote:
+      "Salekh built our portal from scratch and the result speaks for itself. Reliable, fast, and exactly to brief. The whole engagement was fixed scope, fixed price, no surprises. He pushed back when it mattered and shipped on time. Genuinely one of the best engineers we've worked with.",
+    name: "Portal365",
+    role: "Co-founder, Portal365",
   },
   {
-    quote: "[Testimonial 5 — paste from Bark]",
-    name: "[Client name]",
-    role: "[Role, Company]",
+    quote:
+      "Working with Salekh on Nest has been a completely different experience to past agencies. One engineer, direct line, no handoffs. He delivered a property compliance platform that landlords actually want to use. We've already had agencies ask who built it.",
+    name: "Nest",
+    role: "Founder, Nest",
+  },
+  {
+    quote:
+      "Salekh rebuilt our entire ordering and booking flow and the difference has been immediate. The site is faster, easier for staff and our customers comment on how clean it feels. He delivered ahead of schedule and was available throughout. Will be using him again.",
+    name: "ROOTS Pharmacy",
+    role: "Owner, ROOTS Pharmacy",
   },
 ];
 
