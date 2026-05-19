@@ -11,7 +11,7 @@ export function Pricing() {
     <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
         left="© Pricing — プランズ"
-        center="(WDX® — 09)"
+        center="(WDX® — 08)"
         right="Engagements"
       />
 

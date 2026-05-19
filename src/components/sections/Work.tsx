@@ -18,7 +18,7 @@ export function Work() {
 
       <div className="mb-16 flex items-end justify-between gap-8">
         <h2 className="font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
-          Selected projects,
+          Selected work,
           <br />
           <span className="text-muted">2022 — 2026</span>
         </h2>
@@ -53,7 +53,9 @@ function WorkRow({
       transition={{ duration: 0.7, delay: index * 0.06, ease: [0.22, 1, 0.36, 1] }}
     >
       <Link
-        href="#"
+        href={item.url}
+        target="_blank"
+        rel="noopener noreferrer"
         className="group grid grid-cols-12 items-center gap-4 py-8 transition-colors"
         data-hover
       >

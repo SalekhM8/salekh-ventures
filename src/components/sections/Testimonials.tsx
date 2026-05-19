@@ -16,7 +16,7 @@ export function Testimonials() {
 
       <div className="mb-16 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
         <h2 className="max-w-3xl font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
-          Quiet praise from people we&rsquo;ve worked with.
+          Quiet praise from founders and operators who shipped with us.
         </h2>
         <RollButton href="/contact" variant="secondary" size="md">
           Get in touch

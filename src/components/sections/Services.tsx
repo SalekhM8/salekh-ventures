@@ -15,7 +15,7 @@ export function Services() {
       />
 
       <h2 className="mb-20 max-w-4xl font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
-        Six disciplines, one studio. Everything starts and ends with the work.
+        Six capabilities, one engineer. Every part of the build handled in-house.
       </h2>
 
       <div className="grid grid-cols-1 gap-px bg-white/10 md:grid-cols-2 lg:grid-cols-3">

@@ -37,9 +37,9 @@ export function Practice() {
       </div>
 
       <p className="mx-auto max-w-2xl text-center text-base leading-relaxed text-muted-2 md:text-lg">
-        The work is built on a small set of habits: write before drawing,
-        prototype before deciding, edit harder than you make. Repeated until they
-        become invisible.
+        The work is built on a small set of habits. Scope before coding. Ship
+        before polishing. Review every line that touches production. Repeated
+        until they become invisible.
       </p>
     </section>
   );

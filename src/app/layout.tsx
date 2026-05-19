@@ -3,8 +3,6 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { LenisProvider } from "@/components/providers/LenisProvider";
 import { Cursor } from "@/components/ui/Cursor";
-import { Nav } from "@/components/layout/Nav";
-import { Footer } from "@/components/layout/Footer";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -13,8 +11,6 @@ const inter = Inter({
   display: "swap",
 });
 
-// Inter Display ships via the same family on Google Fonts as "Inter"
-// with the display optical-size axis; we alias it here for clarity.
 const interDisplay = Inter({
   variable: "--font-inter-display",
   subsets: ["latin"],
@@ -24,7 +20,8 @@ const interDisplay = Inter({
 
 export const metadata: Metadata = {
   title: "Salekh Ventures",
-  description: "Salekh Ventures — building considered brands and websites.",
+  description:
+    "Salekh Ventures — software engineering for founders who need to ship.",
 };
 
 export default function RootLayout({
@@ -37,12 +34,10 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${interDisplay.variable} antialiased`}
     >
-      <body className="min-h-screen bg-bg text-fg">
+      <body className="min-h-screen">
         <LenisProvider>
           <Cursor />
-          <Nav />
-          <main className="relative z-10">{children}</main>
-          <Footer />
+          {children}
         </LenisProvider>
       </body>
     </html>

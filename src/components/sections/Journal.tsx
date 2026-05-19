@@ -12,15 +12,15 @@ export function Journal() {
     <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
         left="© Journal — ジャーナル"
-        center="(WDX® — 10)"
+        center="(WDX® — 09)"
         right="Notes"
       />
 
       <div className="mb-16 flex flex-col items-start justify-between gap-8 md:flex-row md:items-end">
         <h2 className="max-w-3xl font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
-          Visual notes,
+          Engineering notes,
           <br />
-          short essays, half-thoughts.
+          build logs, half-thoughts.
         </h2>
         <RollButton href="/journal" variant="secondary" size="md">
           Read journal

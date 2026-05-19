@@ -10,7 +10,7 @@ export function Partners() {
       <div className="px-6 md:px-10">
         <SectionHeader
           left="© Partners — パートナー"
-          center="(WDX® — 08)"
+          center="(WDX® — 07)"
           right="Trusted by"
         />
         <h2 className="mb-16 max-w-3xl px-0 font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
@@ -21,12 +21,12 @@ export function Partners() {
       <div className="space-y-6 border-y border-white/5 py-10">
         <Marquee direction="left" speed={50}>
           {partners.map((p) => (
-            <PartnerLogo key={p + "-top"} name={p} />
+            <PartnerLogo key={p.name + "-top"} name={p.name} url={p.url} />
           ))}
         </Marquee>
         <Marquee direction="right" speed={60}>
           {partners.map((p) => (
-            <PartnerLogo key={p + "-bottom"} name={p} />
+            <PartnerLogo key={p.name + "-bottom"} name={p.name} url={p.url} />
           ))}
         </Marquee>
       </div>
@@ -34,10 +34,16 @@ export function Partners() {
   );
 }
 
-function PartnerLogo({ name }: { name: string }) {
+function PartnerLogo({ name, url }: { name: string; url: string }) {
   return (
-    <span className="font-display text-3xl uppercase tracking-tight text-muted-2 transition-colors hover:text-white md:text-5xl">
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-display text-3xl uppercase tracking-tight text-muted-2 transition-colors hover:text-white md:text-5xl"
+      data-hover
+    >
       {name}
-    </span>
+    </a>
   );
 }

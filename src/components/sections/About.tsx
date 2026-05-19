@@ -17,29 +17,31 @@ export function About() {
             as="h2"
             className="font-display text-4xl leading-[1.05] tracking-tight md:text-6xl"
           >
-            A small studio with a steady hand. Twelve years of digital craft, sharp interactions, and a quiet kind of discipline.
+            A senior engineer with thousands of users in production. Ten years of shipping software that runs every day without breaking.
           </RevealText>
         </div>
         <div className="space-y-6 md:col-span-4 md:col-start-9">
           <p className="text-sm leading-relaxed text-muted-2">
-            We work in long, focused sprints with a tight group of collaborators.
-            Most engagements last six to ten weeks, end to end.
+            We work in focused six-week sprints. One senior engineer, one
+            project at a time, with the depth and accountability that delivery
+            actually requires.
           </p>
           <p className="text-sm leading-relaxed text-muted-2">
-            The work is split evenly between brand systems and the websites that
-            carry them. Everything is designed and built under one roof.
+            The work spans digital banking, regulated pharmacy, compliance
+            software, fitness platforms and SaaS for small businesses. Every
+            line of code is written, reviewed and shipped under one roof.
           </p>
           <div className="grid grid-cols-2 gap-4 pt-4">
             <div>
-              <p className="font-display text-3xl">12+</p>
+              <p className="font-display text-3xl">10+</p>
               <p className="text-xs uppercase tracking-[0.2em] text-muted">
                 Years
               </p>
             </div>
             <div>
-              <p className="font-display text-3xl">80+</p>
+              <p className="font-display text-3xl">1000s</p>
               <p className="text-xs uppercase tracking-[0.2em] text-muted">
-                Projects
+                Users in production
               </p>
             </div>
           </div>

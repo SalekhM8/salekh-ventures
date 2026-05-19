@@ -10,15 +10,20 @@ export function FAQ() {
     <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
       <div className="grid grid-cols-3 items-baseline text-xs uppercase tracking-[0.2em] text-muted">
         <span>© Help Center — ヘルプ</span>
-        <span className="text-center">(WDX® — 11)</span>
+        <span className="text-center">(WDX® — 10)</span>
         <span className="text-right">Clarifications</span>
       </div>
 
       <div className="mt-20 grid grid-cols-1 gap-12 md:grid-cols-12 md:gap-16">
         <div className="md:col-span-5">
           <div className="relative aspect-[4/5] w-full max-w-sm overflow-hidden rounded-md bg-surface-2">
-            {/* Placeholder image area — drop your photo into /public/images/about.jpg */}
-            <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-white/0 to-black/40" />
+            <Image
+              src="/images/help-center.png"
+              alt="Salekh Ventures workspace"
+              fill
+              sizes="(min-width: 768px) 32rem, 100vw"
+              className="object-cover"
+            />
           </div>
           <RevealText
             as="h2"
