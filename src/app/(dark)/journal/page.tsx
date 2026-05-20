@@ -4,7 +4,17 @@ import { journal } from "@/lib/data";
 
 export const metadata = {
   title: "Journal — Salekh Ventures",
-  description: "Engineering notes, build logs, half-thoughts.",
+  description:
+    "Notes on high ticket dev work in the UK. Pricing, process, stack and case studies from a senior freelance Next.js engineer.",
+  keywords: [
+    "high ticket developer UK",
+    "freelance Next.js developer UK",
+    "senior software engineer UK",
+    "SaaS developer UK",
+    "MVP developer UK",
+    "Stripe Clerk Next.js",
+  ],
+  alternates: { canonical: "https://salekhventures.com/journal" },
 };
 
 export default function JournalPage() {
@@ -26,7 +36,7 @@ export default function JournalPage() {
         {journal.map((j, i) => (
           <li key={i}>
             <Link
-              href="#"
+              href={`/journal/${j.slug}`}
               className="group flex items-start gap-6 py-8 md:items-center md:gap-10"
               data-hover
             >

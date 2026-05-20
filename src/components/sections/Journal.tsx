@@ -53,7 +53,7 @@ function JournalRow({
       transition={{ duration: 0.7, delay: index * 0.06, ease: [0.22, 1, 0.36, 1] }}
     >
       <Link
-        href="#"
+        href={`/journal/${item.slug}`}
         className="group flex items-start gap-6 py-8 md:items-center md:gap-10"
         data-hover
       >
