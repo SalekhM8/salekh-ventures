@@ -32,7 +32,7 @@ export function RevealText({
     if (typeof children === "string") {
       const words = children.split(" ");
       return words.map((word, i) => (
-        <span key={i} className="inline-flex overflow-hidden align-baseline">
+        <span key={i} className="inline-flex overflow-hidden pb-[0.18em] -mb-[0.18em] align-baseline">
           <motion.span
             initial={{ y: "110%" }}
             animate={inView ? { y: "0%" } : { y: "110%" }}
@@ -51,7 +51,7 @@ export function RevealText({
     }
 
     return (
-      <span className="inline-flex overflow-hidden align-baseline">
+      <span className="inline-flex overflow-hidden pb-[0.18em] -mb-[0.18em] align-baseline">
         <motion.span
           initial={{ y: "110%" }}
           animate={inView ? { y: "0%" } : { y: "110%" }}
