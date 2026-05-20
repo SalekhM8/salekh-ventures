@@ -171,31 +171,31 @@ export const testimonials = [
   },
   {
     quote:
-      "Salekh delivered exactly what we needed — a clean, fast platform that our restaurant team actually uses every day. The analytics dashboard he built has changed how we make decisions. Quick turnaround, great communication and the end product feels properly built. Highly recommend.",
+      "Honestly couldn't be happier with the work. Salekh got our analytics dashboard up and running in a few weeks and the team uses it every single shift. He just gets what we needed without us having to spell it all out. Easy to work with and properly fast. Big recommend.",
     name: "Dacy AI",
     role: "Founder, Dacy AI",
   },
   {
     quote:
-      "We needed a compliance platform that could handle complex workflows without feeling clunky. Salekh built it in weeks, not months. The roles, audit trails and dashboards all just work. He understood the regulatory side as quickly as the engineering side — rare to find.",
+      "We came to Salekh with a pretty complex set of compliance workflows and a tight deadline. He turned it around quicker than anyone else we spoke to and the platform just works the way we need it to. No fuss, no missed deadlines, no surprises on the invoice. Will be using him again.",
     name: "MOTCG",
     role: "Director, MOTCG",
   },
   {
     quote:
-      "Salekh built our portal from scratch and the result speaks for itself. Reliable, fast, and exactly to brief. The whole engagement was fixed scope, fixed price, no surprises. He pushed back when it mattered and shipped on time. Genuinely one of the best engineers we've worked with.",
+      "Top guy. Built our portal from scratch and was always on hand when we had a question. Felt like we had our own engineer on the team rather than dealing with an agency. Hit the timeline he gave us and the platform has been running smoothly since day one.",
     name: "Portal365",
     role: "Co-founder, Portal365",
   },
   {
     quote:
-      "Working with Salekh on Nest has been a completely different experience to past agencies. One engineer, direct line, no handoffs. He delivered a property compliance platform that landlords actually want to use. We've already had agencies ask who built it.",
+      "Working with Salekh has been so much easier than the agencies we'd tried before. One guy, one slack channel, things actually getting done. The landlords using our platform tell us how simple it feels and that came straight from how he built it. 10/10.",
     name: "Nest",
     role: "Founder, Nest",
   },
   {
     quote:
-      "Salekh rebuilt our entire ordering and booking flow and the difference has been immediate. The site is faster, easier for staff and our customers comment on how clean it feels. He delivered ahead of schedule and was available throughout. Will be using him again.",
+      "Salekh rebuilt our site and the difference is night and day. Staff find it easier, customers find it easier and our bookings have gone up since launch. Any time we needed a tweak he came back quickly and got it sorted. Really pleased with how it turned out.",
     name: "ROOTS Pharmacy",
     role: "Owner, ROOTS Pharmacy",
   },
