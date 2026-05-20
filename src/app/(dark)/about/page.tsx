@@ -53,7 +53,7 @@ export default function AboutPage() {
                 </p>
               </div>
               <div className="bg-black p-6">
-                <p className="font-display text-4xl">12</p>
+                <p className="font-display text-4xl">50+</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
                   Shipped projects
                 </p>

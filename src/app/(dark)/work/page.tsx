@@ -4,7 +4,7 @@ import { allWorks } from "@/lib/data";
 
 export const metadata = {
   title: "Work — Salekh Ventures",
-  description: "Selected projects shipped to production, 2020 — 2026.",
+  description: "A selection of recent projects shipped to production.",
 };
 
 export default function WorkPage() {
@@ -12,12 +12,12 @@ export default function WorkPage() {
     <section className="px-6 pb-24 pt-40 md:px-10 md:pb-40 md:pt-48">
       <SectionHeader
         left="© Work"
-        center="(WDX® — Archive)"
-        right="All projects"
+        center="(WDX® — Recent)"
+        right="Recent projects"
       />
 
       <h1 className="mb-20 max-w-3xl font-display text-5xl leading-[1] tracking-tight md:text-7xl">
-        Twelve projects shipped, 2020 &mdash; 2026.
+        Fifty plus projects shipped. A few recent ones below.
       </h1>
 
       <ul className="divide-y divide-white/10 border-y border-white/10">

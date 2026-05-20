@@ -23,7 +23,7 @@ export function Work() {
           <span className="text-muted">2022 — 2026</span>
         </h2>
         <RollButton href="/work" variant="secondary" size="md">
-          See all works
+          See recent work
         </RollButton>
       </div>
 
