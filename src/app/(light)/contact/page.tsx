@@ -16,7 +16,8 @@ export default function ContactPage() {
       </div>
 
       <div className="mt-20 grid grid-cols-1 gap-12 md:grid-cols-12 md:gap-16">
-        <div className="md:col-span-5">
+        {/* Heading + tagline */}
+        <div className="md:col-span-5 md:col-start-1 md:row-start-1">
           <h1 className="font-display text-5xl leading-[1] tracking-tight md:text-7xl">
             Start a project.
           </h1>
@@ -24,37 +25,39 @@ export default function ContactPage() {
             Software engineering from the UK&rsquo;s most trusted freelancer for
             founders who need to ship.
           </p>
-
-          <div className="mt-12 space-y-6 border-t border-black/10 pt-8">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-black/50">
-                Email
-              </p>
-              <a
-                href="mailto:hello@salekhventures.com"
-                className="mt-2 inline-block text-base text-black hover:underline"
-                data-hover
-              >
-                hello@salekhventures.com
-              </a>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-black/50">
-                Based in
-              </p>
-              <p className="mt-2 text-base">United Kingdom — working anywhere</p>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-black/50">
-                Typical turnaround
-              </p>
-              <p className="mt-2 text-base">Sprints 2 weeks · Builds 6 weeks</p>
-            </div>
-          </div>
         </div>
 
-        <div className="md:col-span-7">
+        {/* Form: on mobile sits between heading and details, on desktop spans the right column */}
+        <div className="md:col-span-7 md:col-start-6 md:row-span-2 md:row-start-1">
           <ContactExperience />
+        </div>
+
+        {/* Contact details: on mobile sits below the form, on desktop under the heading */}
+        <div className="space-y-6 border-t border-black/10 pt-8 md:col-span-5 md:col-start-1 md:row-start-2 md:mt-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-black/50">
+              Email
+            </p>
+            <a
+              href="mailto:hello@salekhventures.com"
+              className="mt-2 inline-block text-base text-black hover:underline"
+              data-hover
+            >
+              hello@salekhventures.com
+            </a>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-black/50">
+              Based in
+            </p>
+            <p className="mt-2 text-base">United Kingdom — working anywhere</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-black/50">
+              Typical turnaround
+            </p>
+            <p className="mt-2 text-base">Sprints 2 weeks · Builds 6 weeks</p>
+          </div>
         </div>
       </div>
     </section>
