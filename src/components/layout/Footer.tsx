@@ -67,23 +67,18 @@ export function Footer({ inverted = false }: { inverted?: boolean }) {
               </p>
               <ul className="space-y-2 text-sm">
                 <li>
-                  <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
+                  <a href="https://www.linkedin.com/in/salekh-mahmood-73b7a21a1?utm_source=share_via&utm_content=profile&utm_medium=member_ios" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
                     LinkedIn
                   </a>
                 </li>
                 <li>
-                  <a href="https://x.com" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
-                    X
-                  </a>
-                </li>
-                <li>
-                  <a href="https://github.com/SalekhM8" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
-                    GitHub
-                  </a>
-                </li>
-                <li>
-                  <a href="https://instagram.com" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
+                  <a href="https://instagram.com/salekhventures" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
                     Instagram
+                  </a>
+                </li>
+                <li>
+                  <a href="https://tiktok.com/@salekhventures" target="_blank" rel="noopener noreferrer" className={mutedStrong} data-hover>
+                    TikTok
                   </a>
                 </li>
               </ul>
