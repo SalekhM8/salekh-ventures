@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 240" width="1600" height="240">
+  <!--
+    Salekh Ventures wordmark. Black on transparent.
+    Exact match of the site's nav brand: Inter, semibold 600, tracking tight.
+    The ® is rendered at a softer 50% black as it appears in the nav.
+    If your print shop's system does not have Inter installed,
+    open in Figma / Illustrator and run Type > Create Outlines.
+  -->
+  <text x="40" y="170"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-weight="600"
+        font-size="180"
+        letter-spacing="-4"
+        fill="#000000">Salekh Ventures<tspan fill="rgba(0,0,0,0.5)">®</tspan></text>
+</svg>
