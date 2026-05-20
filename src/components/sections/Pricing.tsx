@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { SectionHeader } from "./SectionHeader";
 import { pricing } from "@/lib/data";
@@ -83,16 +84,19 @@ export function Pricing() {
             </ul>
 
             <div className="mt-10">
-              <RollButton
-                href="/contact"
-                variant={p.highlight ? "secondary" : "primary"}
-                size="md"
-                className={clsx(
-                  p.highlight && "border-black bg-black text-white hover:bg-black/90"
-                )}
-              >
-                {p.cta}
-              </RollButton>
+              {p.highlight ? (
+                <Link
+                  href="/contact"
+                  className="inline-flex cursor-pointer items-center justify-center rounded-full border border-black bg-black px-6 py-3 text-sm uppercase tracking-wide text-white transition-colors duration-200 hover:bg-black/85"
+                  data-hover
+                >
+                  {p.cta}
+                </Link>
+              ) : (
+                <RollButton href="/contact" variant="primary" size="md">
+                  {p.cta}
+                </RollButton>
+              )}
             </div>
           </motion.div>
         ))}
