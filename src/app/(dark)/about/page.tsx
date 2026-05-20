@@ -2,9 +2,23 @@ import { SectionHeader } from "@/components/sections/SectionHeader";
 import { RevealText } from "@/components/ui/RevealText";
 
 export const metadata = {
-  title: "About — Salekh Ventures",
+  title: "About",
   description:
-    "Senior engineer with ten years of shipping production software.",
+    "Senior freelance Next.js developer in the UK with ten years of shipping production software for founders. Fifty plus projects, fintech, SaaS, AI.",
+  keywords: [
+    "senior freelance developer UK",
+    "Next.js developer UK",
+    "about Salekh Ventures",
+    "UK software engineer",
+  ],
+  alternates: { canonical: "https://salekhventures.com/about" },
+  openGraph: {
+    title: "About — Salekh Ventures",
+    description:
+      "Senior freelance Next.js developer in the UK. Fifty plus production projects across SaaS, fintech and AI.",
+    url: "https://salekhventures.com/about",
+    type: "profile",
+  },
 };
 
 export default function AboutPage() {

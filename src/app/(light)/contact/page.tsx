@@ -1,9 +1,23 @@
 import { ContactExperience } from "@/components/contact/ContactExperience";
 
 export const metadata = {
-  title: "Get in touch — Salekh Ventures",
+  title: "Contact",
   description:
-    "Software engineering from the UK's most trusted freelancer for founders who need to ship.",
+    "Start a project with a senior freelance Next.js engineer in the UK. Sprints from two weeks, full Builds from £10,000. Reply within one working day.",
+  keywords: [
+    "hire freelance Next.js developer UK",
+    "contact senior software engineer UK",
+    "start a project UK",
+    "high ticket developer UK",
+  ],
+  alternates: { canonical: "https://salekhventures.com/contact" },
+  openGraph: {
+    title: "Contact — Salekh Ventures",
+    description:
+      "Start a project with a senior freelance Next.js engineer in the UK.",
+    url: "https://salekhventures.com/contact",
+    type: "website",
+  },
 };
 
 export default function ContactPage() {

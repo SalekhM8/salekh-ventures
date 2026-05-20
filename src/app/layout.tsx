@@ -19,9 +19,58 @@ const interDisplay = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Salekh Ventures",
+  metadataBase: new URL("https://salekhventures.com"),
+  title: {
+    default: "Senior Freelance Next.js Developer UK — Salekh Ventures",
+    template: "%s | Salekh Ventures",
+  },
   description:
-    "Salekh Ventures — software engineering for founders who need to ship.",
+    "High ticket dev work in the UK. Senior freelance Next.js engineer building production SaaS, fintech and AI-integrated platforms for founders who need to ship. Fixed price, fixed scope, six week builds.",
+  keywords: [
+    "senior freelance Next.js developer UK",
+    "high ticket developer UK",
+    "freelance software engineer London",
+    "SaaS developer UK",
+    "MVP developer UK",
+    "fixed price web development UK",
+    "Next.js TypeScript engineer",
+    "AI integration developer UK",
+    "Stripe Clerk Next.js",
+    "fintech developer UK",
+  ],
+  authors: [{ name: "Salekh Mahmood", url: "https://salekhventures.com" }],
+  creator: "Salekh Mahmood",
+  publisher: "Salekh Ventures",
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_GB",
+    url: "https://salekhventures.com",
+    siteName: "Salekh Ventures",
+    title: "Senior Freelance Next.js Developer UK — Salekh Ventures",
+    description:
+      "High ticket dev work in the UK. Production SaaS, fintech and AI-integrated platforms built in six weeks.",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Senior Freelance Next.js Developer UK — Salekh Ventures",
+    description:
+      "High ticket dev work in the UK. Production SaaS, fintech and AI builds in six weeks.",
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
+  category: "Software Engineering",
 };
 
 export default function RootLayout({

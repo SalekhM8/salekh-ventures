@@ -3,8 +3,24 @@ import { SectionHeader } from "@/components/sections/SectionHeader";
 import { allWorks } from "@/lib/data";
 
 export const metadata = {
-  title: "Work — Salekh Ventures",
-  description: "A selection of recent projects shipped to production.",
+  title: "Work",
+  description:
+    "Recent production builds by a senior freelance Next.js engineer in the UK. SaaS, fintech, regulated pharmacy, AI platforms and marketplaces.",
+  keywords: [
+    "Next.js portfolio UK",
+    "freelance developer portfolio",
+    "SaaS case studies UK",
+    "high ticket developer UK",
+    "production software UK",
+  ],
+  alternates: { canonical: "https://salekhventures.com/work" },
+  openGraph: {
+    title: "Work — Salekh Ventures",
+    description:
+      "Recent production builds. SaaS, fintech, regulated pharmacy, AI platforms.",
+    url: "https://salekhventures.com/work",
+    type: "website",
+  },
 };
 
 export default function WorkPage() {
