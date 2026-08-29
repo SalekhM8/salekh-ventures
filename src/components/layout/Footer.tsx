@@ -59,6 +59,11 @@ export function Footer({ inverted = false }: { inverted?: boolean }) {
                     Journal
                   </Link>
                 </li>
+                <li>
+                  <Link href="/sync" className={`${mutedStrong}`} data-hover>
+                    Sync
+                  </Link>
+                </li>
               </ul>
             </div>
             <div>

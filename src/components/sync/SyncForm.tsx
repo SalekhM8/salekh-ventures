@@ -32,20 +32,27 @@ export function SyncForm() {
   const eventIdRef = useRef<string>("");
   const firedRef = useRef(false);
 
+  const confirmationRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (state?.ok && !firedRef.current) {
       firedRef.current = true;
       window.fbq?.("track", "Lead", {}, { eventID: state.eventId });
+      confirmationRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
     }
   }, [state]);
 
   if (state?.ok) {
     return (
       <motion.div
+        ref={confirmationRef}
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="rounded-2xl border border-white/10 bg-surface p-10"
+        className="rounded-2xl border border-white/10 bg-surface p-10 scroll-mt-32"
       >
         <p className="text-xs uppercase tracking-[0.2em] text-muted">Sent</p>
         <h3 className="mt-4 font-display text-3xl tracking-tight md:text-4xl">
