@@ -35,10 +35,18 @@ export function SyncForm() {
   const confirmationRef = useRef<HTMLDivElement>(null);
 
   // Carry ad attribution (utm_* / fbclid from Meta) into the submission.
+  // Remembered in localStorage so a return visit days later still credits
+  // the ad that first brought them here.
   const [utm, setUtm] = useState("");
   useEffect(() => {
     try {
-      setUtm(window.location.search.slice(1));
+      const search = window.location.search.slice(1);
+      if (/(?:^|&)(utm_|fbclid)/.test(search)) {
+        localStorage.setItem("sv_attribution", search);
+        setUtm(search);
+      } else {
+        setUtm(localStorage.getItem("sv_attribution") || search);
+      }
     } catch {}
   }, []);
 
