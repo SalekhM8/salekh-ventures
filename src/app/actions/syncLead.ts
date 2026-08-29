@@ -53,7 +53,7 @@ async function sendMetaLead(
   if (clientIp) userData.client_ip_address = clientIp;
   if (userAgent) userData.client_user_agent = userAgent;
 
-  const body = {
+  const body: Record<string, unknown> = {
     data: [
       {
         event_name: "Lead",
@@ -65,6 +65,11 @@ async function sendMetaLead(
       },
     ],
   };
+  // Set META_TEST_EVENT_CODE (from Events Manager → Test events) to route
+  // server events into the Test Events tab while verifying dedup; remove after.
+  if (process.env.META_TEST_EVENT_CODE) {
+    body.test_event_code = process.env.META_TEST_EVENT_CODE;
+  }
 
   try {
     const res = await fetch(
