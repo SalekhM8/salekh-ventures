@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { SectionHeader } from "@/components/sections/SectionHeader";
 import { SyncForm } from "./SyncForm";
@@ -63,7 +64,60 @@ function Reveal({
   );
 }
 
+declare global {
+  interface Window {
+    fbq?: (...args: unknown[]) => void;
+    posthog?: { capture?: (name: string, props?: Record<string, unknown>) => void };
+  }
+}
+
+// Funnel checkpoints: did they reach the price, did they start the form.
+// Fired once each, to Meta (custom events) and PostHog when present, so
+// dropoff between click → pricing → form start → Lead is visible per ad.
+function useFunnelEvents() {
+  useEffect(() => {
+    const fired = { pricing: false, form: false };
+    const track = (name: string) => {
+      try {
+        window.fbq?.("trackCustom", name);
+        window.posthog?.capture?.(name);
+      } catch {}
+    };
+
+    const pricingEl = document.getElementById("pricing");
+    let observer: IntersectionObserver | undefined;
+    if (pricingEl && "IntersectionObserver" in window) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (!fired.pricing && entries.some((e) => e.isIntersecting)) {
+            fired.pricing = true;
+            track("ViewPricing");
+            observer?.disconnect();
+          }
+        },
+        { threshold: 0.3 }
+      );
+      observer.observe(pricingEl);
+    }
+
+    const applyEl = document.getElementById("apply");
+    const onFocus = () => {
+      if (!fired.form) {
+        fired.form = true;
+        track("StartForm");
+      }
+    };
+    applyEl?.addEventListener("focusin", onFocus);
+
+    return () => {
+      observer?.disconnect();
+      applyEl?.removeEventListener("focusin", onFocus);
+    };
+  }, []);
+}
+
 export function SyncLanding() {
+  useFunnelEvents();
   return (
     <>
       {/* Hero */}
