@@ -5,7 +5,7 @@ import "./globals.css";
 import { LenisProvider } from "@/components/providers/LenisProvider";
 import { Cursor } from "@/components/ui/Cursor";
 
-const META_PIXEL_ID = "1281250857508098";
+const META_PIXEL_ID = "2052226205397501";
 
 const inter = Inter({
   variable: "--font-inter",
