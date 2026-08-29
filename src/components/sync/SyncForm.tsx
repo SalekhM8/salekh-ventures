@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { submitSyncLead, type SyncLeadResult } from "@/app/actions/syncLead";
 
@@ -33,6 +33,14 @@ export function SyncForm() {
   const firedRef = useRef(false);
 
   const confirmationRef = useRef<HTMLDivElement>(null);
+
+  // Carry ad attribution (utm_* / fbclid from Meta) into the submission.
+  const [utm, setUtm] = useState("");
+  useEffect(() => {
+    try {
+      setUtm(window.location.search.slice(1));
+    } catch {}
+  }, []);
 
   useEffect(() => {
     if (state?.ok && !firedRef.current) {
@@ -71,6 +79,7 @@ export function SyncForm() {
       }}
       className="space-y-8"
     >
+      <input type="hidden" name="utm" value={utm} readOnly />
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <Field label="Name" name="name" required placeholder="Your full name" />
         <Field

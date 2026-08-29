@@ -103,6 +103,17 @@ export async function submitSyncLead(
   };
   const eventId = String(formData.get("eventId") ?? "").trim() || crypto.randomUUID();
 
+  // Ad attribution from the landing URL's query string.
+  const attribution: string[] = [];
+  try {
+    const p = new URLSearchParams(String(formData.get("utm") ?? ""));
+    for (const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"]) {
+      const v = p.get(k);
+      if (v) attribution.push(`${k.replace("utm_", "")}: ${v}`);
+    }
+    if (p.get("fbclid")) attribution.push("fbclid: present (Meta ad click)");
+  } catch {}
+
   if (!payload.name) return { ok: false, error: "Name is required." };
   if (!payload.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
     return { ok: false, error: "Please enter a valid email." };
@@ -145,6 +156,7 @@ export async function submitSyncLead(
     ...(payload.pricing
       ? ["", "How they price / know profit after fees:", payload.pricing]
       : []),
+    ...(attribution.length ? ["", "Came from:", ...attribution] : []),
   ].join("\n");
 
   // If no Resend key is configured yet, log and accept — so the form works locally.
