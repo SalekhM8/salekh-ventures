@@ -200,12 +200,12 @@ export function SyncLanding() {
         <SectionHeader left="© About" center="(SV® — 03)" right="Who's behind it" />
         <Reveal>
           <h2 className="max-w-3xl font-display text-3xl leading-[1.15] tracking-tight md:text-5xl">
-            I&rsquo;m Salekh. I build software for regulated businesses —
-            pharmacies, payment companies and care providers.
+            I&rsquo;m Salekh. I&rsquo;ve built over 50 platforms across
+            industries — automotive to pharmaceutical to hospitality.
           </h2>
           <p className="mt-8 max-w-2xl text-base leading-relaxed text-muted-2 md:text-lg">
-            I build your setup myself and you deal with me directly, not a
-            support queue.
+            Now it&rsquo;s time to solve the e-commerce puzzle. I build your
+            setup myself and you deal with me directly, not a support queue.
           </p>
         </Reveal>
       </section>
