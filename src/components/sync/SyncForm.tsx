@@ -183,14 +183,15 @@ export function SyncForm() {
         )}
       </AnimatePresence>
 
-      <div className="flex items-center justify-between gap-4 pt-2">
-        <p className="text-xs text-muted">
-          By submitting you agree to be contacted about your enquiry.
+      <div className="flex flex-col gap-4 pt-2 md:flex-row md:items-center md:justify-between">
+        <p className="text-xs leading-relaxed text-muted">
+          No payment, no commitment. I read every reply personally and come
+          back the same day — just to see if it fits your setup.
         </p>
         <button
           type="submit"
           disabled={pending}
-          className="inline-flex cursor-pointer items-center justify-center rounded-full bg-white px-7 py-3 text-sm uppercase tracking-wide text-black transition-colors hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-white px-7 py-3 text-sm uppercase tracking-wide text-black transition-colors hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-60"
           data-hover
         >
           {pending ? "Sending…" : "Send it over"}
