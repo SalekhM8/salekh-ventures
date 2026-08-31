@@ -21,6 +21,15 @@ const platformOptions = [
 
 const productOptions = ["Under 100", "100 to 1,000", "Over 1,000"];
 
+const stockOptions = [
+  "By hand / spreadsheets",
+  "A sync tool already",
+  "Shopify plus apps",
+  "I don't — it's a mess",
+];
+
+const profitOptions = ["Yes, exactly", "Roughly", "Honestly, no"];
+
 export function SyncForm() {
   const [state, formAction, pending] = useActionState<
     SyncLeadResult | null,
@@ -88,24 +97,6 @@ export function SyncForm() {
       className="space-y-8"
     >
       <input type="hidden" name="utm" value={utm} readOnly />
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        <Field label="Name" name="name" required placeholder="Your full name" />
-        <Field
-          label="Email"
-          name="email"
-          type="email"
-          required
-          placeholder="you@company.com"
-        />
-        <Field
-          label="Phone"
-          name="phone"
-          type="tel"
-          required
-          placeholder="07…"
-        />
-      </div>
-
       <fieldset>
         <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
           Which platforms do you currently sell on?{" "}
@@ -155,20 +146,73 @@ export function SyncForm() {
         </div>
       </fieldset>
 
-      <TextAreaField
-        label="How do you keep stock and prices matching across platforms right now?"
-        name="stock"
-        required
-        placeholder="Spreadsheets, a sync tool, doing it by hand at night — whatever it actually is."
-        rows={3}
-      />
+      <fieldset>
+        <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
+          How do you keep stock matching across platforms right now?{" "}
+          <span className="text-white">*</span>
+        </legend>
+        <div className="flex flex-wrap gap-3">
+          {stockOptions.map((o) => (
+            <label
+              key={o}
+              className="flex cursor-pointer items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm transition-colors has-checked:border-white has-checked:bg-white has-checked:text-black"
+              data-hover
+            >
+              <input
+                type="radio"
+                name="stock"
+                value={o}
+                required
+                className="sr-only"
+              />
+              {o}
+            </label>
+          ))}
+        </div>
+      </fieldset>
 
-      <TextAreaField
-        label="How do you decide your prices, and do you know your actual profit per product on each platform after fees? (optional)"
-        name="pricing"
-        placeholder="Honest answer — most sellers don't know this per channel."
-        rows={3}
-      />
+      <fieldset>
+        <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
+          Do you know your profit per product after each platform&rsquo;s fees?{" "}
+          <span className="text-white">*</span>
+        </legend>
+        <div className="flex flex-wrap gap-3">
+          {profitOptions.map((o) => (
+            <label
+              key={o}
+              className="flex cursor-pointer items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm transition-colors has-checked:border-white has-checked:bg-white has-checked:text-black"
+              data-hover
+            >
+              <input
+                type="radio"
+                name="pricing"
+                value={o}
+                required
+                className="sr-only"
+              />
+              {o}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        <Field label="Name" name="name" required placeholder="Your full name" />
+        <Field
+          label="Email"
+          name="email"
+          type="email"
+          required
+          placeholder="you@company.com"
+        />
+        <Field
+          label="Phone"
+          name="phone"
+          type="tel"
+          required
+          placeholder="07…"
+        />
+      </div>
 
       <AnimatePresence>
         {state?.ok === false && (
@@ -226,36 +270,6 @@ function Field({
         required={required}
         placeholder={placeholder}
         className="w-full border-b border-white/20 bg-transparent py-2 text-base text-white placeholder:text-white/30 focus:border-white focus:outline-none"
-      />
-    </label>
-  );
-}
-
-function TextAreaField({
-  label,
-  name,
-  required = false,
-  placeholder,
-  rows = 4,
-}: {
-  label: string;
-  name: string;
-  required?: boolean;
-  placeholder?: string;
-  rows?: number;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-2 inline-block text-xs uppercase tracking-[0.15em] text-muted">
-        {label}
-        {required && <span className="text-white"> *</span>}
-      </span>
-      <textarea
-        name={name}
-        required={required}
-        placeholder={placeholder}
-        rows={rows}
-        className="w-full resize-none border-b border-white/20 bg-transparent py-2 text-base text-white placeholder:text-white/30 focus:border-white focus:outline-none"
       />
     </label>
   );

@@ -127,10 +127,16 @@ export async function submitSyncLead(
   if (!payload.products) {
     return { ok: false, error: "Select roughly how many products you list." };
   }
-  if (!payload.stock || payload.stock.length < 5) {
+  if (!payload.stock) {
     return {
       ok: false,
-      error: "Tell us briefly how you keep stock matching today.",
+      error: "Pick how you keep stock matching today.",
+    };
+  }
+  if (!payload.pricing) {
+    return {
+      ok: false,
+      error: "Pick whether you know your profit after fees.",
     };
   }
 
@@ -150,12 +156,8 @@ export async function submitSyncLead(
     `Phone: ${payload.phone}`,
     `Platforms: ${payload.platforms.join(", ")}`,
     `Products listed: ${payload.products}`,
-    "",
-    "How they keep stock matching now:",
-    payload.stock,
-    ...(payload.pricing
-      ? ["", "How they price / know profit after fees:", payload.pricing]
-      : []),
+    `Stock sync today: ${payload.stock}`,
+    `Knows profit after fees: ${payload.pricing ?? "-"}`,
     ...(attribution.length ? ["", "Came from:", ...attribution] : []),
   ].join("\n");
 
