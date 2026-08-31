@@ -18,7 +18,7 @@ const features = [
   {
     n: "01",
     title: "Stock sync in both directions",
-    desc: "Something sells on eBay — Amazon and TikTok know immediately. You restock and every platform updates. No oversells, no refunds, no account health strikes, no updating three dashboards at 11pm.",
+    desc: "Something sells on eBay and Amazon and TikTok know immediately. You restock and every platform updates. No oversells, no refunds, no account health strikes, no updating three dashboards at 11pm.",
   },
   {
     n: "02",
@@ -33,12 +33,12 @@ const features = [
   {
     n: "04",
     title: "Listings written for each platform",
-    desc: "Add a product once and it generates channel-ready listings: keyword-optimised titles and bullets for Amazon, item specifics for eBay, hook-style titles for TikTok. One product in, three native listings out.",
+    desc: "Add a product once and it generates listings ready for each channel: keyword optimised titles and bullets for Amazon, item specifics for eBay, hook style titles for TikTok. One product in, three native listings out.",
   },
   {
     n: "05",
     title: "An AI analyst that works without being asked",
-    desc: "It watches your sales, fees and competitors and tells you what needs attention: this SKU is being undercut on Amazon, this product lost money on TikTok last week after commission, this price rise on eBay wouldn't cost you sales. It knows your real margin per SKU per channel after every platform's fees, warns you before any price change takes a sale below profit, and flags opportunities when it spots them. You don't dig through reports — it comes to you.",
+    desc: "It watches your sales, fees and competitors and tells you what needs attention: this SKU is being undercut on Amazon, this product lost money on TikTok last week after commission, this price rise on eBay wouldn't cost you sales. It knows your real margin per SKU per channel after every platform's fees, warns you before any price change takes a sale below profit, and flags opportunities when it spots them. You don't dig through reports, it comes to you.",
   },
 ];
 
@@ -138,7 +138,7 @@ export function SyncLanding() {
           className="mt-8 max-w-2xl text-lg leading-relaxed text-muted-2 md:text-xl"
         >
           Stock, prices and listings managed in one place and synced to every
-          channel in seconds — not on a 15-minute timer.
+          channel in seconds, not on a 15 minute timer.
         </motion.p>
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -242,7 +242,7 @@ export function SyncLanding() {
               If you&rsquo;re not live within 14 days, the £399 comes back.
             </p>
             <p className="mt-6 text-sm leading-relaxed text-black/60 md:text-base">
-              For less than an empty Shopify store plus a sync tool — and the
+              For less than an empty Shopify store plus a sync tool. And the
               sync actually works.
             </p>
           </div>
@@ -255,10 +255,10 @@ export function SyncLanding() {
         <Reveal>
           <h2 className="max-w-3xl font-display text-3xl leading-[1.15] tracking-tight md:text-5xl">
             I&rsquo;m Salekh. I&rsquo;ve built over 50 platforms across
-            industries — automotive to pharmaceutical to hospitality.
+            industries, from automotive to pharmaceutical to hospitality.
           </h2>
           <p className="mt-8 max-w-2xl text-base leading-relaxed text-muted-2 md:text-lg">
-            Now it&rsquo;s time to solve the e-commerce puzzle. I build your
+            Now it&rsquo;s time to solve the ecommerce puzzle. I build your
             setup myself and you deal with me directly, not a support queue.
           </p>
         </Reveal>
@@ -266,7 +266,7 @@ export function SyncLanding() {
 
       {/* Form */}
       <section id="apply" className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
-        <SectionHeader left="© Apply" center="(SV® — 04)" right="Same-day reply" />
+        <SectionHeader left="© Apply" center="(SV® — 04)" right="Same day reply" />
         <Reveal>
           <h2 className="mb-6 max-w-3xl font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
             See if it fits your setup

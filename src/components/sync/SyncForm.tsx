@@ -25,7 +25,7 @@ const stockOptions = [
   "By hand / spreadsheets",
   "A sync tool already",
   "Shopify plus apps",
-  "I don't — it's a mess",
+  "I don't, it's a mess",
 ];
 
 const profitOptions = ["Yes, exactly", "Roughly", "Honestly, no"];
@@ -230,7 +230,7 @@ export function SyncForm() {
       <div className="flex flex-col gap-4 pt-2 md:flex-row md:items-center md:justify-between">
         <p className="text-xs leading-relaxed text-muted">
           No payment, no commitment. I read every reply personally and come
-          back the same day — just to see if it fits your setup.
+          back the same day to see if it fits your setup.
         </p>
         <button
           type="submit"

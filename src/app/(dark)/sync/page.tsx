@@ -4,7 +4,7 @@ import { SyncLanding } from "@/components/sync/SyncLanding";
 export const metadata: Metadata = {
   title: "Multichannel Sync for Amazon, eBay & TikTok Shop",
   description:
-    "Stock, prices and listings managed in one place and synced to Amazon, eBay and TikTok Shop in seconds. No Shopify required. £399 done-for-you setup, £29/month locked.",
+    "Stock, prices and listings managed in one place and synced to Amazon, eBay and TikTok Shop in seconds. No Shopify required. £399 setup done for you, then £29 a month locked.",
   alternates: { canonical: "/sync" },
   openGraph: {
     title: "Multichannel Sync for Amazon, eBay & TikTok Shop",
