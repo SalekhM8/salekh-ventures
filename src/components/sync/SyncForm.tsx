@@ -40,6 +40,7 @@ export function SyncForm() {
   // and the server-side CAPI event so Meta deduplicates them.
   const eventIdRef = useRef<string>("");
   const firedRef = useRef(false);
+  const [clientError, setClientError] = useState<string | null>(null);
 
   const confirmationRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +91,21 @@ export function SyncForm() {
   return (
     <form
       action={(formData) => {
+        // Visible validation for the pill questions: their real inputs are
+        // visually hidden, so the browser's native "fill this in" bubble can
+        // anchor to an invisible element and the submit looks dead.
+        const missing: string[] = [];
+        if (formData.getAll("platforms").length === 0)
+          missing.push("which platforms you sell on");
+        if (!formData.get("products")) missing.push("how many products");
+        if (!formData.get("stock")) missing.push("how you keep stock matching");
+        if (!formData.get("pricing"))
+          missing.push("whether you know your profit after fees");
+        if (missing.length) {
+          setClientError(`Quick one before it sends: pick ${missing.join(", ")}.`);
+          return;
+        }
+        setClientError(null);
         if (!eventIdRef.current) eventIdRef.current = crypto.randomUUID();
         formData.set("eventId", eventIdRef.current);
         formAction(formData);
@@ -137,7 +153,6 @@ export function SyncForm() {
                 type="radio"
                 name="products"
                 value={o}
-                required
                 className="sr-only"
               />
               {o}
@@ -162,7 +177,6 @@ export function SyncForm() {
                 type="radio"
                 name="stock"
                 value={o}
-                required
                 className="sr-only"
               />
               {o}
@@ -187,7 +201,6 @@ export function SyncForm() {
                 type="radio"
                 name="pricing"
                 value={o}
-                required
                 className="sr-only"
               />
               {o}
@@ -215,14 +228,14 @@ export function SyncForm() {
       </div>
 
       <AnimatePresence>
-        {state?.ok === false && (
+        {(clientError || state?.ok === false) && (
           <motion.p
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             className="text-sm text-red-400"
           >
-            {state.error}
+            {clientError ?? (state?.ok === false ? state.error : null)}
           </motion.p>
         )}
       </AnimatePresence>
