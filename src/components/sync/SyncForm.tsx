@@ -84,6 +84,11 @@ export function SyncForm() {
         <h3 className="mt-4 font-display text-3xl tracking-tight md:text-4xl">
           Got it. I&rsquo;ll come back to you today.
         </h3>
+        <p className="mt-4 max-w-md text-sm leading-relaxed text-muted-2">
+          I&rsquo;ve just emailed you a confirmation, and I&rsquo;ll text you
+          from my personal number to sort a quick call. If a UK mobile you
+          don&rsquo;t recognise messages you today, that&rsquo;s me.
+        </p>
       </motion.div>
     );
   }

@@ -201,5 +201,37 @@ export async function submitSyncLead(
   }
 
   await sendMetaLead(payload, eventId, clientIp, userAgent);
+
+  // Warm auto-reply to the lead so the follow-up text/call isn't from a
+  // stranger. Failure here must never fail the lead.
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: payload.email,
+        reply_to: to,
+        subject: "Got your details, quick heads up",
+        text: [
+          `Hi ${payload.name.split(" ")[0]},`,
+          "",
+          "Salekh here. Your form just came through and I've read your answers, so I already have a decent picture of your setup.",
+          "",
+          "I'll text you today from my personal number to sort a quick 10 minute call, so if a UK mobile you don't recognise messages you, that's me.",
+          "",
+          "Nothing to do until then. Talk soon,",
+          "Salekh",
+          "salekhventures.com/sync",
+        ].join("\n"),
+      }),
+    });
+  } catch (err) {
+    console.error("[sync] Auto-reply error:", err);
+  }
+
   return { ok: true, eventId };
 }
