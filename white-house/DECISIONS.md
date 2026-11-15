@@ -425,3 +425,10 @@ Checked by driving a separate headless Chrome at desktop and phone sizes: the pa
 - In the house on a phone: labels on the building are larger; floor name tags that ran off the edge are hidden (Places covers them); the bottom sheets for a room and for the Chief of Staff start folded down so the scene stays visible, and open with a tab; a floor shows about two rooms and is swiped sideways.
 - Chief of Staff chat: the box uses 16px type so iPhones do not zoom the page when it is tapped; the page behind is pinned and the house follows the keyboard; asking a question opens the conversation and keeps the newest answer in view; each answer is stamped with its time, because the simulation keeps moving and two answers a few seconds apart can differ; the suggested questions sit on one row.
 - The Chief of Staff on the public demo is still simple rules over the simulation, not a model. It now answers a few more kinds of question (what this is, price, whether it is real, what has happened) and says what it can answer when it does not recognise one.
+
+### S5. Phone: slide sheet, floors on the grounds, form asks revenue. Decided, 15 Nov 2026
+
+- The "fold down" tab was replaced, at Salekh's request, by a sheet that slides: drag it up or down between fully minimised, half and full height, or tap the grabber. It opens at half height.
+- On a phone the grounds now show the four floors and the Oval Office as tags down the right edge. They had been hidden because the in-scene tags ran off the screen.
+- The browser's blue focus box on the question field was replaced with a rounded outline in the house's own colour.
+- The team form now also asks roughly what the business takes a month (five bands) and for a website or Instagram (optional). The mobile number was already required. The lead email's subject line carries the name, kind of business, revenue band and phone number.

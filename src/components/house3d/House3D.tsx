@@ -108,13 +108,112 @@ function Dot({ color, size = 9 }: { color: string; size?: number }) {
   return <span style={{ display: "inline-block", flex: "none", width: size, height: size, borderRadius: size, background: color }} />;
 }
 
-/* Phones: a tab at the top of a bottom sheet that folds it down or opens it up. */
-function SheetHandle({ open, onToggle, label }: { open: boolean; onToggle: () => void; label: string }) {
+type Snap = "min" | "mid" | "full";
+const SNAPS: Snap[] = ["min", "mid", "full"];
+
+/* The panel for a room or the Oval Office. On a computer it is a fixed card on
+   the right. On a phone it is a sheet you slide up and down: fully minimised,
+   half, or full height. */
+function Sheet({
+  phone,
+  snap,
+  onSnap,
+  hostH,
+  label,
+  title,
+  sub,
+  dot,
+  wide,
+  reduced,
+  children,
+}: {
+  phone: boolean;
+  snap: Snap;
+  onSnap: (s: Snap) => void;
+  hostH: number;
+  label: string;
+  title: string;
+  sub: string;
+  dot: string;
+  wide?: boolean;
+  reduced: boolean;
+  children: ReactNode;
+}) {
+  const [dragH, setDragH] = useState<number | null>(null);
+  const start = useRef<{ y: number; h: number } | null>(null);
+
+  if (!phone) {
+    return (
+      <motion.aside
+        aria-label={label}
+        initial={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
+        animate={{ x: 0, opacity: 1 }}
+        exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
+        transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
+        style={{ ...card }}
+        className={`absolute bottom-5 right-5 top-[84px] z-30 flex flex-col overflow-hidden ${wide ? "w-[440px]" : "w-[420px]"}`}
+      >
+        {children}
+      </motion.aside>
+    );
+  }
+
+  const H: Record<Snap, number> = { min: 74, mid: Math.round(hostH * 0.42), full: Math.max(260, hostH - 150) };
+  const height = dragH ?? H[snap];
+  const minimised = snap === "min" && dragH === null;
+  const release = () => {
+    const from = start.current;
+    start.current = null;
+    if (!from) return;
+    const h = dragH ?? from.h;
+    setDragH(null);
+    const moved = h - from.h;
+    if (Math.abs(moved) < 8) return onSnap(snap === "mid" ? "full" : "mid"); // a tap
+    const nearest = SNAPS.reduce((best, k) => (Math.abs(H[k] - h) < Math.abs(H[best] - h) ? k : best), snap);
+    const step = SNAPS[Math.max(0, Math.min(2, SNAPS.indexOf(snap) + (moved > 0 ? 1 : -1)))] ?? snap;
+    onSnap(nearest === snap && Math.abs(moved) > 36 ? step : nearest);
+  };
+
   return (
-    <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full flex-none flex-col items-center gap-1.5 pb-1.5 pt-2.5 md:hidden">
-      <span style={{ width: 44, height: 5, borderRadius: 5, background: C.blush }} />
-      <span style={{ font: `600 10.5px/1.3 ${SANS}`, letterSpacing: "0.14em", textTransform: "uppercase", color: C.terracotta }}>{open ? "Fold down" : label}</span>
-    </button>
+    <motion.aside
+      aria-label={label}
+      initial={{ height: 0 }}
+      animate={{ height }}
+      transition={dragH !== null || reduced ? { duration: 0 } : { type: "spring", stiffness: 330, damping: 34 }}
+      style={{ ...card }}
+      className="absolute inset-x-2 bottom-2 z-30 flex flex-col overflow-hidden"
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label="Slide up or down. Tap to open or close."
+        onPointerDown={(e) => {
+          start.current = { y: e.clientY, h: H[snap] };
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          if (start.current) setDragH(Math.max(60, Math.min(H.full + 24, start.current.h - (e.clientY - start.current.y))));
+        }}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") onSnap(snap === "mid" ? "full" : "mid");
+        }}
+        className="flex flex-none cursor-grab touch-none select-none flex-col items-center px-5 pb-2 pt-2.5"
+      >
+        <span style={{ width: 44, height: 5, borderRadius: 5, background: C.blush }} />
+        {minimised && (
+          <span className="mt-2.5 flex w-full items-center gap-2.5">
+            <Dot color={dot} size={10} />
+            <span style={{ font: `300 20px/1.1 ${SERIF}`, letterSpacing: "-0.02em" }}>{title}</span>
+            <span className="ml-auto" style={{ font: `500 13px/1 ${SANS}`, color: "#7a6a62" }}>
+              {sub}
+            </span>
+          </span>
+        )}
+      </div>
+      <div className={minimised ? "hidden" : "flex min-h-0 flex-1 flex-col"}>{children}</div>
+    </motion.aside>
   );
 }
 
@@ -163,8 +262,17 @@ export default function House3D({
   const msgId = useRef(0);
   const labelLayer = useRef<HTMLDivElement>(null);
   /* Phones: the bottom sheet starts folded down so the scene stays visible. */
-  const [sheet, setSheet] = useState(false);
-  const collapsed = lowPower && !sheet;
+  const [snap, setSnap] = useState<Snap>("mid");
+  const collapsed = lowPower && snap !== "full";
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [hostH, setHostH] = useState(760);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHostH(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const chatBox = useRef<HTMLDivElement>(null);
   /* Phones: swipe sideways along a floor. */
   const pan = useRef(-1e6);
@@ -221,7 +329,7 @@ export default function House3D({
   const go = (next: Loc) => {
     setAuto(false);
     setPlacesOpen(false);
-    setSheet(false);
+    setSnap("mid");
     if (next.place === "floor" && (loc.place !== "floor" || loc.floor !== next.floor)) pan.current = -1e6;
     setScoring(null);
     setViewing(null);
@@ -261,7 +369,7 @@ export default function House3D({
     const text = q.trim();
     if (!text) return;
     setDraft("");
-    setSheet(true);
+    setSnap("full");
     say("you", text);
     const a = answer(text, sim, stopped, names);
     setTimeout(() => {
@@ -273,7 +381,7 @@ export default function House3D({
   useEffect(() => {
     const el = chatBox.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [chat, sheet]);
+  }, [chat, snap]);
 
   const room = loc.place === "floor" && loc.room ? ROOM_BY_ID[loc.room] : undefined;
   const roomSim = room ? sim[room.id] : undefined;
@@ -346,7 +454,7 @@ export default function House3D({
   );
 
   return (
-    <div data-lenis-prevent={embedded ? undefined : true} className={embedded ? "relative h-full w-full overflow-hidden" : "fixed inset-0 overflow-hidden"}
+    <div ref={rootRef} data-lenis-prevent={embedded ? undefined : true} className={embedded ? "relative h-full w-full overflow-hidden" : "fixed inset-0 overflow-hidden"}
       style={{ background: C.light, color: C.ink, cursor: "auto", fontFamily: SANS, touchAction: panning ? "pan-y" : undefined }}
       onPointerDown={(e) => {
         if (panning) drag.current = { x: e.clientX, start: floorPan(loc.place === "floor" ? loc.floor : 0, pan.current) };
@@ -528,6 +636,43 @@ export default function House3D({
         )}
       </AnimatePresence>
 
+      {/* phones: the floors, as tags down the right edge of the grounds */}
+      {lowPower && loc.place === "grounds" && (
+        <nav aria-label="Floors" className="absolute right-2 top-1/2 z-20 flex -translate-y-1/2 flex-col items-end gap-2">
+          {FLOORS.map((f, fi) => {
+            const rooms = ROOMS.filter((r) => r.floorId === f.id);
+            const needs = rooms.some((r) => stateOf(r.id) === "waiting");
+            const failed = rooms.some((r) => stateOf(r.id) === "failed");
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => go({ place: "floor", floor: fi, room: null })}
+                style={{ ...card, borderRadius: 14, padding: "8px 12px", textAlign: "left", boxShadow: "0 6px 18px rgba(26,14,11,0.18)" }}
+                className="flex min-h-12 items-center gap-2.5"
+              >
+                <span>
+                  <span className="block" style={{ font: `600 9.5px/1.3 ${SANS}`, letterSpacing: "0.18em", color: C.terracotta }}>
+                    FLOOR {f.level}
+                  </span>
+                  <span className="block" style={{ font: `300 17px/1.1 ${SERIF}`, letterSpacing: "-0.02em" }}>
+                    {fname(f.id)}
+                  </span>
+                </span>
+                {(needs || failed) && <Dot color={failed ? RED : AMBER} size={9} />}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => go({ place: "oval" })}
+            style={{ ...btnPrimary, minHeight: 48, padding: "0 16px", borderRadius: 14, font: `600 13.5px/1 ${SANS}` }}
+          >
+            Oval Office
+          </button>
+        </nav>
+      )}
+
       {/* hints */}
       {loc.place === "grounds" && (
         <div style={{ ...card, borderRadius: 999, padding: "13px 20px", font: `500 13.5px/1.3 ${SANS}` }} className="absolute bottom-5 left-1/2 hidden -translate-x-1/2 md:block">
@@ -543,17 +688,18 @@ export default function House3D({
       {/* a room: now, what it made, what happened */}
       <AnimatePresence>
         {room && roomSim && (
-          <motion.aside
+          <Sheet
             key="room"
-            aria-label={`${fname(room.floorId)}, ${DEPTS[room.dept].name}`}
-            initial={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
-            style={{ ...card }}
-            className={`absolute inset-x-3 bottom-3 z-30 flex flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[420px] ${collapsed ? "max-h-[46%]" : "max-h-[78%]"}`}
+            phone={lowPower}
+            snap={snap}
+            onSnap={setSnap}
+            hostH={hostH}
+            reduced={reduced}
+            label={`${fname(room.floorId)}, ${DEPTS[room.dept].name}`}
+            title={DEPTS[room.dept].name}
+            sub={stopped ? "Stopped" : STATE_LABEL[roomState]}
+            dot={stateColor(roomState, room.dept)}
           >
-            <SheetHandle open={sheet} onToggle={() => setSheet((v) => !v)} label="Show work and history" />
             <div data-lenis-prevent className="flex-1 overflow-y-auto px-5 pb-4 pt-1 md:p-6">
               <Eyebrow>
                 Floor {room.level} · {fname(room.floorId)}
@@ -689,7 +835,7 @@ export default function House3D({
                                     value={note}
                                     onChange={(e) => setNote(e.target.value)}
                                     rows={3}
-                                    className="mt-1.5 w-full rounded-xl p-3"
+                                    className="mt-1.5 w-full rounded-xl p-3 outline-none focus:ring-2 focus:ring-[#1a0e0b]"
                                     style={{ background: C.surface, border: `1.5px solid ${C.blush}`, font: `400 14px/1.5 ${SANS}`, color: C.ink }}
                                   />
                                 )}
@@ -754,7 +900,7 @@ export default function House3D({
                 })}
               </div>
             </div>
-          </motion.aside>
+          </Sheet>
         )}
       </AnimatePresence>
 
@@ -805,17 +951,19 @@ export default function House3D({
       {/* the Oval Office: ask the Chief of Staff */}
       <AnimatePresence>
         {loc.place === "oval" && (
-          <motion.aside
+          <Sheet
             key="oval"
-            aria-label="Chief of Staff"
-            initial={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
-            style={{ ...card }}
-            className={`absolute inset-x-3 bottom-3 z-30 flex flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[440px] ${collapsed ? "max-h-[44%]" : "max-h-[80%]"}`}
+            phone={lowPower}
+            snap={snap}
+            onSnap={setSnap}
+            hostH={hostH}
+            reduced={reduced}
+            wide
+            label="Chief of Staff"
+            title="Chief of Staff"
+            sub="Slide up to ask"
+            dot={C.ink}
           >
-            <SheetHandle open={sheet} onToggle={() => setSheet((v) => !v)} label="Show the conversation" />
             <div className="px-5 pb-2 pt-1 md:p-6 md:pb-3">
               <Eyebrow>Oval Office</Eyebrow>
               <div className="mt-1">
@@ -827,7 +975,7 @@ export default function House3D({
                 {(() => {
                   const last = chat.filter((m) => m.from === "chief").slice(-1)[0];
                   return last ? (
-                    <button type="button" onClick={() => setSheet(true)} className="block w-full text-left">
+                    <button type="button" onClick={() => setSnap("full")} className="block w-full text-left">
                       <span style={{ font: `600 10.5px/1.4 ${SANS}`, letterSpacing: "0.16em", textTransform: "uppercase", color: "#7a6a62" }}>As of {last.time}</span>
                       <span className="mt-1 line-clamp-3" style={{ font: `300 18px/1.3 ${SERIF}`, letterSpacing: "-0.015em" }}>
                         {last.text}
@@ -893,8 +1041,8 @@ export default function House3D({
                   onChange={(e) => setDraft(e.target.value)}
                   placeholder={lowPower ? "Ask the Chief of Staff" : "Ask about a floor, a department, or what needs you"}
                   enterKeyHint="send"
-                  className="min-h-12 min-w-0 flex-1 rounded-full px-4"
-                  style={{ background: C.cream, color: C.ink, font: `400 16px/1 ${SANS}`, border: `1.5px solid ${C.blush}` }}
+                  className="min-h-12 min-w-0 flex-1 rounded-full px-4 outline-none focus:ring-2 focus:ring-[#1a0e0b]"
+                  style={{ background: C.cream, color: C.ink, font: `400 16px/1 ${SANS}`, border: `1.5px solid ${C.blush}`, WebkitTapHighlightColor: "transparent" }}
                 />
                 <button type="submit" style={btnPrimary}>
                   Ask
@@ -906,7 +1054,7 @@ export default function House3D({
                   : "Prototype: these answers are worked out from the simulation by simple rules. The real Chief of Staff answers from the log."}
               </p>
             </div>
-          </motion.aside>
+          </Sheet>
         )}
       </AnimatePresence>
         </>
