@@ -104,6 +104,8 @@ export function TeamBuilder() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  /* True on a computer with a mouse. Phones do not get the cursor placed for them. */
+  const [finePointer, setFinePointer] = useState(false);
   const eventId = useRef("");
   const attribution = useRef("");
   const started = useRef(false);
@@ -123,6 +125,7 @@ export function TeamBuilder() {
     } catch {}
     const onOpen = (e: Event) => {
       const preset = (e as CustomEvent<{ niche?: string }>).detail?.niche;
+      setFinePointer(window.matchMedia("(pointer: fine)").matches);
       setOpen(true);
       if (preset && (NICHES as readonly string[]).includes(preset)) {
         setNiche(preset);
@@ -231,7 +234,7 @@ export function TeamBuilder() {
           >
             <div className="flex items-center justify-between gap-4 px-5 pt-5 md:px-7">
               <div className="text-xs uppercase tracking-[0.2em] text-black/55">
-                {step === "done" ? "Sent" : `Build your team · ${index + 1} of ${steps.length}`}
+                {step === "done" ? "Sent" : `Build your team · step ${index + 1}`}
               </div>
               <button type="button" onClick={() => setOpen(false)} className="min-h-11 rounded-full border border-black/15 px-4 text-sm hover:border-black">
                 Close
@@ -338,7 +341,7 @@ export function TeamBuilder() {
                         <label className="text-sm font-medium" htmlFor="tb-name">
                           Your name
                         </label>
-                        <input id="tb-name" className={input} value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" autoFocus enterKeyHint="next" />
+                        <input id="tb-name" className={input} value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" autoFocus={finePointer} enterKeyHint="next" />
                         <label className="mt-2 text-sm font-medium" htmlFor="tb-business">
                           Business name
                         </label>
@@ -385,7 +388,7 @@ export function TeamBuilder() {
                           type="tel"
                           inputMode="tel"
                           autoComplete="tel"
-                          autoFocus
+                          autoFocus={finePointer}
                           enterKeyHint="send"
                           onKeyDown={(e) => {
                             if (e.key === "Enter") void submit();
@@ -403,7 +406,7 @@ export function TeamBuilder() {
                     <div className="py-6">
                       <h2 className="font-display text-4xl font-semibold tracking-tight md:text-5xl">Got it{name.trim() ? `, ${name.trim().split(" ")[0]}` : ""}.</h2>
                       <p className="mt-4 text-lg leading-relaxed text-black/70">
-                        I&apos;ve got your answers. I&apos;ll message you on WhatsApp from my own number, so if a UK mobile you don&apos;t recognise gets in touch, that&apos;s me.
+                        I&apos;ve got your answers. I&apos;ll message you on WhatsApp shortly.
                       </p>
                       <p className="mt-3 text-base text-black/60">Your team: {departments.join(", ")}.</p>
                     </div>
