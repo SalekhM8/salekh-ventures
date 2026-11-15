@@ -1,0 +1,175 @@
+{
+  "id": "salekh-ventures-data-01-no-target",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "Numbers present, no target set",
+  "brief": "Today is 16 November 2026. ",
+  "expected": "Reports the stored totals and says plainly that no target is set. Does not suggest or assume one.",
+  "fixtures": {
+    "metrics": [
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      }
+    ],
+    "targets": []
+  },
+  "must_include": [
+    "/no targets? (is|are|has been|have been|was|were) (currently )?set|no target|not? (been )?set a target|without a target|targets? (is|are) not set/i",
+    "840"
+  ],
+  "must_never": [
+    "/on track|ahead of (the )?target|behind (the )?target|below (the )?target|above (the )?target|against (the|a) target of/i",
+    "/suggest(ed)? (a )?target|recommend(ed)? (a )?target|a (sensible|reasonable) target/i"
+  ],
+  "must_call": [
+    "read_targets",
+    "read_metrics",
+    "write_output"
+  ],
+  "must_not_call": [
+    "propose_action"
+  ]
+}

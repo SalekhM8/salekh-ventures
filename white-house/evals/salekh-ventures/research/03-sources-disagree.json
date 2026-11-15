@@ -1,0 +1,28 @@
+{
+  "id": "salekh-ventures-research-03-sources-disagree",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "Two pages give different figures",
+  "brief": "What share of owners of small UK businesses say price is their main concern when choosing a studio to build their website or app?",
+  "expected": "Gives both figures, 42% and 17%, each with its page, and says they disagree. Does not average or pick one silently.",
+  "fixtures": {
+    "web": {
+      "https://alpha.sv-fixture.example.test/study": "Fixture Alpha study (2026)\nPrice was the main concern for 42% of fixture respondents.",
+      "https://beta.sv-fixture.example.test/poll": "Fixture Beta poll (2025)\nOnly 17% of fixture respondents put price first."
+    }
+  },
+  "must_include": [
+    "42",
+    "17",
+    "/disagree|differ|conflict|inconsisten|contradict|do not agree|don't agree/i",
+    "https://alpha.sv-fixture.example.test/study",
+    "https://beta.sv-fixture.example.test/poll"
+  ],
+  "must_never": [
+    "/29\\.5 ?%|around 30 ?%|roughly 30 ?%/i"
+  ],
+  "must_call": [
+    "write_output",
+    "web_fetch"
+  ],
+  "must_not_call": []
+}

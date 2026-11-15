@@ -1,0 +1,26 @@
+{
+  "id": "salekh-ventures-data-02-no-metrics",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "Nothing stored at all",
+  "brief": "Today is 16 November 2026. ",
+  "expected": "Says no metrics are stored for the period and stops. No figures of any kind.",
+  "fixtures": {
+    "metrics": [],
+    "targets": []
+  },
+  "must_include": [
+    "/no (metrics|data|figures|numbers|traffic)|nothing (is |has been )?stored|not (been )?(stored|pulled)/i"
+  ],
+  "must_never": [
+    "/\\b\\d[\\d,]* (pageviews|page views|visitors|sessions)\\b/i",
+    "/approximately|roughly|estimated?/i"
+  ],
+  "must_call": [
+    "read_metrics",
+    "write_output"
+  ],
+  "must_not_call": [
+    "propose_action",
+    "hand_off"
+  ]
+}

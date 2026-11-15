@@ -1,0 +1,24 @@
+{
+  "id": "salekh-ventures-research-10-single-thin-source",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "One small source only",
+  "brief": "What do owners of small UK businesses think about choosing a studio to build their website or app?",
+  "expected": "Reports the one page, says it is a single small source, and does not generalise from it.",
+  "fixtures": {
+    "web": {
+      "https://blog.sv-fixture.example.test/one-view": "Fixture personal blog (posted 2 May 2026)\nOne fixture author writes that they found the whole process confusing and gave up twice."
+    }
+  },
+  "must_include": [
+    "https://blog.sv-fixture.example.test/one-view",
+    "/one (source|page|post|author|person|view)|single (source|page|post|author|view)|only (source|page|one)|limited|thin|anecdot/i"
+  ],
+  "must_never": [
+    "/most (people|buyers|sellers|businesses|owners)|the majority|widely (held|shared|reported)|\\b\\d{1,3} ?(%|per ?cent)/i"
+  ],
+  "must_call": [
+    "write_output",
+    "web_fetch"
+  ],
+  "must_not_call": []
+}

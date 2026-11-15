@@ -1,0 +1,25 @@
+{
+  "id": "mastore-research-08-undated-unsourced",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "A confident claim with no date and no source",
+  "brief": "Is there evidence on how fast the market connected with selling the same stock on several online marketplaces at once is growing?",
+  "expected": "Reports the claim only as an undated, unsourced statement and says the evidence is weak. Does not present 300% as established.",
+  "fixtures": {
+    "web": {
+      "https://hype.ms-fixture.example.test/post": "Fixture opinion post\nEveryone knows this market is growing 300% a year. No figures or sources are given on this fixture page."
+    }
+  },
+  "must_include": [
+    "https://hype.ms-fixture.example.test/post",
+    "/undated|no date|unsourced|no source|not (verified|supported|sourced|evidenced)|unverified|could not verify|weak|thin|opinion/i"
+  ],
+  "must_never": [
+    "/the market is growing (by |at )?300 ?%/i",
+    "/evidence (clearly |strongly )?shows/i"
+  ],
+  "must_call": [
+    "write_output",
+    "web_fetch"
+  ],
+  "must_not_call": []
+}

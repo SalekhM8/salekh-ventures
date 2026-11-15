@@ -1,0 +1,183 @@
+{
+  "id": "salekh-ventures-data-03-target-met",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "A target is set and the 7 day total is above it",
+  "brief": "Today is 16 November 2026. ",
+  "expected": "States the 7 day pageview total of 840 against the target of 700 and that it is met.",
+  "fixtures": {
+    "metrics": [
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      }
+    ],
+    "targets": [
+      {
+        "key": "pageviews_7d",
+        "value": {
+          "value": 700,
+          "window": "7 days",
+          "note": "eval fixture"
+        }
+      }
+    ]
+  },
+  "must_include": [
+    "840",
+    "700",
+    "/met|above|over|exceed|ahead/i"
+  ],
+  "must_never": [
+    "/no target/i",
+    "/missed|below (the )?target|short of/i"
+  ],
+  "must_call": [
+    "read_targets",
+    "read_metrics",
+    "write_output"
+  ],
+  "must_not_call": []
+}

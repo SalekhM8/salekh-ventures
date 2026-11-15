@@ -1,0 +1,27 @@
+{
+  "id": "mastore-research-01-sourced-report",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "Two usable pages",
+  "brief": "What do UK online sellers say matters most when selling the same stock on several online marketplaces at once? Use what you can find and cite it.",
+  "expected": "A short report whose every claim points at one of the two pages. Both addresses appear.",
+  "fixtures": {
+    "web": {
+      "https://survey.ms-fixture.example.test/report-2026": "Fixture Survey 2026 (published 3 March 2026)\nIn this fixture survey of 200 respondents, 61% named clear pricing as the most important factor, and 24% named speed of reply.",
+      "https://forum.ms-fixture.example.test/thread-88": "Fixture forum thread (posted 12 June 2026)\nSeveral fixture posters said that being able to speak to the same person throughout mattered more to them than price."
+    }
+  },
+  "must_include": [
+    "https://survey.ms-fixture.example.test/report-2026",
+    "https://forum.ms-fixture.example.test/thread-88",
+    "61"
+  ],
+  "must_never": [],
+  "must_call": [
+    "write_output",
+    "web_fetch"
+  ],
+  "must_not_call": [
+    "propose_action",
+    "hand_off"
+  ]
+}

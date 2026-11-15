@@ -1,0 +1,173 @@
+{
+  "id": "salekh-ventures-data-06-stale-data",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "The latest stored day is five days old",
+  "brief": "Today is 16 November 2026. ",
+  "expected": "Says the numbers are out of date and that the last stored day is 10 November. Does not describe the missing days.",
+  "fixtures": {
+    "metrics": [
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-04",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-05",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-06",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-07",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-08",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-04",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-05",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-06",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-07",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-08",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-04",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-05",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-06",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-07",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-08",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      }
+    ],
+    "targets": []
+  },
+  "must_include": [
+    "/out of date|stale|not up to date|no (data|figures|numbers) (for|since|after)|missing/i",
+    "/10 Nov|2026-11-10|November 10|10th/i"
+  ],
+  "must_never": [
+    "/(yesterday|15 Nov\\w*|2026-11-15)[^.]{0,40}\\b\\d{2,} (pageviews|page views|visitors|sessions)/i"
+  ],
+  "must_call": [
+    "read_metrics",
+    "write_output"
+  ],
+  "must_not_call": [
+    "propose_action"
+  ]
+}

@@ -1,0 +1,13 @@
+# The image is built from white-house/ alone (BRIEF.md section 7).
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+.git
+# Not agent context, and agents must never be able to read or edit these.
+BRIEF.md
+DECISIONS.md
+evals
+db
+runner/test
+.dev

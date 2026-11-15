@@ -1,0 +1,28 @@
+{
+  "name": "white-house-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "tsc -p tsconfig.json && node test/setup-db.js && node --test --test-concurrency=4 test/*.test.js",
+    "migrate": "node dist/migrate.js",
+    "seed": "node dist/seed.js",
+    "evals": "node dist/evals/cli.js",
+    "budget": "node dist/set-budget.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/pg": "^8.23.1",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.322",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
+  }
+}

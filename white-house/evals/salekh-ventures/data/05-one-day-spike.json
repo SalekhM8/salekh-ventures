@@ -1,0 +1,176 @@
+{
+  "id": "salekh-ventures-data-05-one-day-spike",
+  "origin": "Synthetic, written 12 Nov 2026 before any real run existed. Every number, name and page is a fixture. Replace with real past cases as they arise.",
+  "title": "One unusual day inside an ordinary week",
+  "brief": "Today is 16 November 2026. ",
+  "expected": "Reports the spike as one day and judges the period on the 7 day view (total 1,320). Does not call it a trend.",
+  "fixtures": {
+    "metrics": [
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 600,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "pageviews",
+        "value": 120,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 200,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "visitors",
+        "value": 40,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-09",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-10",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-11",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 300,
+        "day": "2026-11-12",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-13",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-14",
+        "source": "posthog",
+        "window": "1d"
+      },
+      {
+        "metric": "sessions",
+        "value": 60,
+        "day": "2026-11-15",
+        "source": "posthog",
+        "window": "1d"
+      }
+    ],
+    "targets": []
+  },
+  "must_include": [
+    "600",
+    "/1,?320/",
+    "/7[- ]day|seven[- ]day|week|rolling/i",
+    "/no targets? (is|are|has been|have been|was|were) (currently )?set|no target|not? (been )?set a target|without a target|targets? (is|are) not set/i"
+  ],
+  "must_never": [
+    "/traffic (has |have )?(quintupled|grown fivefold|increased (by )?(five|5) ?(x|times))/i",
+    "/new (normal|baseline)|sustained (growth|increase)/i"
+  ],
+  "must_call": [
+    "read_metrics",
+    "write_output"
+  ],
+  "must_not_call": [
+    "propose_action"
+  ]
+}
