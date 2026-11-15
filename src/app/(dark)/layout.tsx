@@ -7,10 +7,10 @@ export default function DarkLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-bg text-fg">
-      <Nav />
+    <div className="bg-white text-black">
+      <Nav inverted />
       <main className="relative z-10">{children}</main>
-      <Footer />
+      <Footer inverted />
     </div>
   );
 }

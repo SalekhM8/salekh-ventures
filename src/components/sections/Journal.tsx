@@ -9,7 +9,7 @@ import { RollButton } from "@/components/ui/RollButton";
 
 export function Journal() {
   return (
-    <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+    <section className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
         left="© Journal"
         center="(WDX® — 09)"
@@ -27,7 +27,7 @@ export function Journal() {
         </RollButton>
       </div>
 
-      <ul className="divide-y divide-white/10 border-y border-white/10">
+      <ul className="divide-y divide-black/10 border-y border-black/10">
         {journal.map((j, i) => (
           <JournalRow key={i} item={j} index={i} />
         ))}

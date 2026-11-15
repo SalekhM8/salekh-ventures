@@ -32,7 +32,7 @@ export default function JournalPage() {
         build logs, half-thoughts.
       </h1>
 
-      <ul className="divide-y divide-white/10 border-y border-white/10">
+      <ul className="divide-y divide-black/10 border-y border-black/10">
         {journal.map((j, i) => (
           <li key={i}>
             <Link

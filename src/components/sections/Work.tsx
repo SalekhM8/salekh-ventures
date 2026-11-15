@@ -9,7 +9,7 @@ import { RollButton } from "@/components/ui/RollButton";
 
 export function Work() {
   return (
-    <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+    <section className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
         left="© Work"
         center="(WDX® — 03)"
@@ -27,7 +27,7 @@ export function Work() {
         </RollButton>
       </div>
 
-      <ul className="divide-y divide-white/10 border-y border-white/10">
+      <ul className="divide-y divide-black/10 border-y border-black/10">
         {works.map((w, i) => (
           <WorkRow key={w.n} item={w} index={i} />
         ))}

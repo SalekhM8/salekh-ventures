@@ -12,14 +12,14 @@ export function Accordion({ items }: { items: AccordionItem[] }) {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <div className="divide-y divide-white/10 border-y border-white/10">
+    <div className="divide-y divide-black/10 border-y border-black/10">
       {items.map((item, i) => {
         const isOpen = open === i;
         return (
           <div key={i}>
             <button
               onClick={() => setOpen(isOpen ? null : i)}
-              className="flex w-full items-center gap-8 py-8 text-left transition-colors hover:text-white"
+              className="flex w-full items-center gap-8 py-8 text-left transition-colors hover:text-black"
               data-hover
             >
               <span className="w-10 shrink-0 text-sm text-muted tabular-nums">
@@ -31,7 +31,7 @@ export function Accordion({ items }: { items: AccordionItem[] }) {
               <motion.span
                 animate={{ rotate: isOpen ? 45 : 0 }}
                 transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                className="ml-auto shrink-0 text-2xl text-white/70"
+                className="ml-auto shrink-0 text-2xl text-black/70"
               >
                 +
               </motion.span>

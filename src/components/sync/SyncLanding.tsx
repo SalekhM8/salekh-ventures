@@ -148,7 +148,7 @@ export function SyncLanding() {
         >
           <a
             href="#apply"
-            className="inline-flex cursor-pointer items-center justify-center rounded-full bg-white px-7 py-3 text-sm uppercase tracking-wide text-black transition-colors hover:bg-white/85"
+            className="inline-flex cursor-pointer items-center justify-center rounded-full bg-black px-7 py-3 text-sm uppercase tracking-wide text-white transition-colors hover:bg-black/85"
             data-hover
           >
             See if it fits your setup
@@ -159,7 +159,7 @@ export function SyncLanding() {
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.4, ease: EASE }}
-          className="mt-20 border-t border-white/10 pt-8 md:mt-24"
+          className="mt-20 border-t border-black/10 pt-8 md:mt-24"
         >
           <p className="mb-6 text-xs uppercase tracking-[0.2em] text-muted">
             Syncs with
@@ -169,7 +169,7 @@ export function SyncLanding() {
               <span key={p.name} className="flex items-center gap-3 opacity-80">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={p.logo} alt={p.name} className="h-6 w-6 md:h-7 md:w-7" />
-                <span className="text-sm font-medium tracking-wide text-white md:text-base">
+                <span className="text-sm font-medium tracking-wide text-black md:text-base">
                   {p.name}
                 </span>
               </span>
@@ -179,7 +179,7 @@ export function SyncLanding() {
       </section>
 
       {/* What it does */}
-      <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+      <section className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
         <SectionHeader left="© Features" center="(SV® — 01)" right="What it does" />
         <Reveal>
           <h2 className="mb-20 max-w-3xl font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
@@ -193,8 +193,8 @@ export function SyncLanding() {
               delay={i * 0.08}
               className={
                 f.n === "05"
-                  ? "rounded-2xl border border-white/10 bg-surface p-8 md:col-span-2 md:p-10"
-                  : "rounded-2xl border border-white/10 bg-surface p-8 md:p-10"
+                  ? "rounded-2xl border border-black/10 bg-surface p-8 md:col-span-2 md:p-10"
+                  : "rounded-2xl border border-black/10 bg-surface p-8 md:p-10"
               }
             >
               <span className="text-xs uppercase tracking-[0.2em] text-muted">
@@ -212,36 +212,36 @@ export function SyncLanding() {
       </section>
 
       {/* What it costs */}
-      <section id="pricing" className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+      <section id="pricing" className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
         <SectionHeader left="© Pricing" center="(SV® — 02)" right="What it costs" />
         <Reveal>
-          <div className="mx-auto max-w-3xl rounded-2xl border border-white bg-white p-8 text-black md:p-14">
-            <p className="text-xs uppercase tracking-[0.2em] text-black/50">
+          <div className="mx-auto max-w-3xl rounded-2xl border border-black bg-black p-8 text-white md:p-14">
+            <p className="text-xs uppercase tracking-[0.2em] text-white/50">
               What it costs
             </p>
             <div className="mt-6 flex flex-wrap items-baseline gap-x-4 gap-y-2">
               <span className="font-display text-5xl tracking-tight md:text-6xl">
                 £399
               </span>
-              <span className="text-base text-black/60">setup, done for you</span>
+              <span className="text-base text-white/60">setup, done for you</span>
             </div>
-            <p className="mt-5 text-sm leading-relaxed text-black/70 md:text-base">
+            <p className="mt-5 text-sm leading-relaxed text-white/70 md:text-base">
               I migrate your full catalog, connect every channel, map your
               listings and verify stock across platforms before going live. You
               touch nothing technical.
             </p>
-            <div className="mt-8 flex flex-wrap items-baseline gap-x-4 gap-y-2 border-t border-black/10 pt-8">
+            <div className="mt-8 flex flex-wrap items-baseline gap-x-4 gap-y-2 border-t border-white/10 pt-8">
               <span className="font-display text-4xl tracking-tight md:text-5xl">
-                £29<span className="text-xl text-black/50"> /month</span>
+                £29<span className="text-xl text-white/50"> /month</span>
               </span>
-              <span className="text-base text-black/60">
+              <span className="text-base text-white/60">
                 locked at that rate permanently, cancel anytime
               </span>
             </div>
-            <p className="mt-8 rounded-xl bg-black px-5 py-4 text-sm leading-relaxed text-white md:text-base">
+            <p className="mt-8 rounded-xl bg-white px-5 py-4 text-sm leading-relaxed text-black md:text-base">
               If you&rsquo;re not live within 14 days, the £399 comes back.
             </p>
-            <p className="mt-6 text-sm leading-relaxed text-black/60 md:text-base">
+            <p className="mt-6 text-sm leading-relaxed text-white/60 md:text-base">
               For less than an empty Shopify store plus a sync tool. And the
               sync actually works.
             </p>
@@ -250,7 +250,7 @@ export function SyncLanding() {
       </section>
 
       {/* Who's behind it */}
-      <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+      <section className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
         <SectionHeader left="© About" center="(SV® — 03)" right="Who's behind it" />
         <Reveal>
           <h2 className="max-w-3xl font-display text-3xl leading-[1.15] tracking-tight md:text-5xl">
@@ -265,7 +265,7 @@ export function SyncLanding() {
       </section>
 
       {/* Form */}
-      <section id="apply" className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+      <section id="apply" className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
         <SectionHeader left="© Apply" center="(SV® — 04)" right="Same day reply" />
         <Reveal>
           <h2 className="mb-6 max-w-3xl font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">

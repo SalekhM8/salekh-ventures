@@ -78,7 +78,7 @@ export function SyncForm() {
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="rounded-2xl border border-white/10 bg-surface p-10 scroll-mt-32"
+        className="rounded-2xl border border-black/10 bg-surface p-10 scroll-mt-32"
       >
         <p className="text-xs uppercase tracking-[0.2em] text-muted">Sent</p>
         <h3 className="mt-4 font-display text-3xl tracking-tight md:text-4xl">
@@ -121,13 +121,13 @@ export function SyncForm() {
       <fieldset>
         <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
           Which platforms do you currently sell on?{" "}
-          <span className="text-white">*</span>
+          <span className="text-black">*</span>
         </legend>
         <div className="flex flex-wrap gap-3">
           {platformOptions.map((p) => (
             <label
               key={p}
-              className="group flex cursor-pointer items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm transition-colors has-checked:border-white has-checked:bg-white has-checked:text-black"
+              className="group flex cursor-pointer items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm transition-colors has-checked:border-black has-checked:bg-black has-checked:text-white"
               data-hover
             >
               <input
@@ -145,13 +145,13 @@ export function SyncForm() {
       <fieldset>
         <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
           Roughly how many products do you list?{" "}
-          <span className="text-white">*</span>
+          <span className="text-black">*</span>
         </legend>
         <div className="flex flex-wrap gap-3">
           {productOptions.map((o) => (
             <label
               key={o}
-              className="flex cursor-pointer items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm transition-colors has-checked:border-white has-checked:bg-white has-checked:text-black"
+              className="flex cursor-pointer items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm transition-colors has-checked:border-black has-checked:bg-black has-checked:text-white"
               data-hover
             >
               <input
@@ -169,13 +169,13 @@ export function SyncForm() {
       <fieldset>
         <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
           How do you keep stock matching across platforms right now?{" "}
-          <span className="text-white">*</span>
+          <span className="text-black">*</span>
         </legend>
         <div className="flex flex-wrap gap-3">
           {stockOptions.map((o) => (
             <label
               key={o}
-              className="flex cursor-pointer items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm transition-colors has-checked:border-white has-checked:bg-white has-checked:text-black"
+              className="flex cursor-pointer items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm transition-colors has-checked:border-black has-checked:bg-black has-checked:text-white"
               data-hover
             >
               <input
@@ -193,13 +193,13 @@ export function SyncForm() {
       <fieldset>
         <legend className="mb-3 text-xs uppercase tracking-[0.15em] text-muted">
           Do you know your profit per product after each platform&rsquo;s fees?{" "}
-          <span className="text-white">*</span>
+          <span className="text-black">*</span>
         </legend>
         <div className="flex flex-wrap gap-3">
           {profitOptions.map((o) => (
             <label
               key={o}
-              className="flex cursor-pointer items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm transition-colors has-checked:border-white has-checked:bg-white has-checked:text-black"
+              className="flex cursor-pointer items-center gap-2 rounded-full border border-black/15 px-4 py-2 text-sm transition-colors has-checked:border-black has-checked:bg-black has-checked:text-white"
               data-hover
             >
               <input
@@ -253,7 +253,7 @@ export function SyncForm() {
         <button
           type="submit"
           disabled={pending}
-          className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-white px-7 py-3 text-sm uppercase tracking-wide text-black transition-colors hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-black px-7 py-3 text-sm uppercase tracking-wide text-white transition-colors hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-60"
           data-hover
         >
           {pending ? "Sending…" : "Send it over"}
@@ -280,14 +280,14 @@ function Field({
     <label className="block">
       <span className="mb-2 inline-block text-xs uppercase tracking-[0.15em] text-muted">
         {label}
-        {required && <span className="text-white"> *</span>}
+        {required && <span className="text-black"> *</span>}
       </span>
       <input
         type={type}
         name={name}
         required={required}
         placeholder={placeholder}
-        className="w-full border-b border-white/20 bg-transparent py-2 text-base text-white placeholder:text-white/30 focus:border-white focus:outline-none"
+        className="w-full border-b border-black/20 bg-transparent py-2 text-base text-black placeholder:text-black/30 focus:border-black focus:outline-none"
       />
     </label>
   );

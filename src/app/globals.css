@@ -1,13 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --bg: 0 0 0;
-  --fg: 255 255 255;
-  --muted: 153 153 153;
-  --muted-2: 187 187 187;
-  --surface: 18 18 18;
-  --surface-2: 34 34 34;
-  --accent: 0 153 255;
+  /* White ground, black type (inverted 15 Nov 2026). */
+  --bg: 255 255 255;
+  --fg: 0 0 0;
+  --muted: 105 105 105;
+  --muted-2: 70 70 70;
+  --surface: 245 245 243;
+  --surface-2: 233 233 230;
+  --accent: 0 102 204;
 }
 
 @theme inline {

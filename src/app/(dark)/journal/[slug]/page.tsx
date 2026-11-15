@@ -50,10 +50,10 @@ function Block({ block }: { block: JournalBlock }) {
   }
   if (block.type === "ul") {
     return (
-      <ul className="mt-6 space-y-3 text-base leading-relaxed text-white/80 md:text-lg">
+      <ul className="mt-6 space-y-3 text-base leading-relaxed text-black/80 md:text-lg">
         {block.items.map((item, i) => (
           <li key={i} className="flex items-start gap-3">
-            <span className="mt-2.5 inline-block h-1 w-1 shrink-0 rounded-full bg-white" />
+            <span className="mt-2.5 inline-block h-1 w-1 shrink-0 rounded-full bg-black" />
             <span>{item}</span>
           </li>
         ))}
@@ -61,7 +61,7 @@ function Block({ block }: { block: JournalBlock }) {
     );
   }
   return (
-    <p className="mt-6 text-base leading-relaxed text-white/80 md:text-lg">
+    <p className="mt-6 text-base leading-relaxed text-black/80 md:text-lg">
       {block.text}
     </p>
   );
@@ -110,21 +110,21 @@ export default async function JournalPostPage({
       <div className="mx-auto max-w-3xl">
         <Link
           href="/journal"
-          className="mb-12 inline-flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-muted hover:text-white"
+          className="mb-12 inline-flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-muted hover:text-black"
           data-hover
         >
-          <span className="h-px w-10 bg-white/30" />
+          <span className="h-px w-10 bg-black/30" />
           Back to journal
         </Link>
 
         <h1 className="font-display text-4xl leading-[1.05] tracking-tight md:text-6xl">
           {post.title}
         </h1>
-        <p className="mt-8 text-lg leading-relaxed text-white/70 md:text-xl">
+        <p className="mt-8 text-lg leading-relaxed text-black/70 md:text-xl">
           {post.excerpt}
         </p>
 
-        <div className="mt-10 flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-white/10 py-5 text-xs uppercase tracking-[0.2em] text-muted">
+        <div className="mt-10 flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-black/10 py-5 text-xs uppercase tracking-[0.2em] text-muted">
           <span>{post.author}</span>
           <span>{post.date}</span>
           <span>{post.readingMinutes} min read</span>
@@ -136,14 +136,14 @@ export default async function JournalPostPage({
           ))}
         </div>
 
-        <div className="mt-20 rounded-2xl border border-white/10 bg-surface p-8 md:p-10">
+        <div className="mt-20 rounded-2xl border border-black/10 bg-surface p-8 md:p-10">
           <p className="text-xs uppercase tracking-[0.2em] text-muted">
             Working on something?
           </p>
           <h3 className="mt-4 font-display text-3xl leading-[1.1] tracking-tight md:text-4xl">
             High ticket dev work, built in six weeks.
           </h3>
-          <p className="mt-4 max-w-xl text-base leading-relaxed text-white/70">
+          <p className="mt-4 max-w-xl text-base leading-relaxed text-black/70">
             Senior freelance Next.js engineer in the UK. Fixed price, fixed scope,
             one engineer with the keyboard. Sprints from two weeks, full Builds
             from £10,000.
@@ -155,7 +155,7 @@ export default async function JournalPostPage({
           </div>
         </div>
 
-        <div className="mt-20 border-t border-white/10 pt-10">
+        <div className="mt-20 border-t border-black/10 pt-10">
           <p className="text-xs uppercase tracking-[0.2em] text-muted">
             Next entry
           </p>
@@ -167,7 +167,7 @@ export default async function JournalPostPage({
             <h3 className="font-display text-2xl leading-[1.1] tracking-tight transition-transform duration-500 group-hover:translate-x-2 md:text-3xl">
               {next.title}
             </h3>
-            <span className="text-xl text-muted group-hover:text-white">→</span>
+            <span className="text-xl text-muted group-hover:text-black">→</span>
           </Link>
         </div>
       </div>

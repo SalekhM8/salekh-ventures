@@ -23,8 +23,8 @@ export function RollButton({
   const baseClasses = clsx(
     "inline-flex cursor-pointer items-center justify-center rounded-full border uppercase tracking-wide transition-colors duration-200",
     variant === "primary"
-      ? "border-white bg-white text-black hover:bg-white/85"
-      : "border-white/20 bg-transparent text-white hover:border-white hover:bg-white/5",
+      ? "border-black bg-black text-white hover:bg-black/85"
+      : "border-black/20 bg-transparent text-black hover:border-black hover:bg-black/5",
     size === "sm" && "px-4 py-2 text-xs",
     size === "md" && "px-6 py-3 text-sm",
     size === "lg" && "px-8 py-4 text-base",

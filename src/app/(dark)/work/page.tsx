@@ -36,7 +36,7 @@ export default function WorkPage() {
         Fifty plus projects shipped. A few recent ones below.
       </h1>
 
-      <ul className="divide-y divide-white/10 border-y border-white/10">
+      <ul className="divide-y divide-black/10 border-y border-black/10">
         {allWorks.map((w) => (
           <li key={w.n}>
             <Link

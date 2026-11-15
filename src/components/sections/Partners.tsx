@@ -6,7 +6,7 @@ import { SectionHeader } from "./SectionHeader";
 
 export function Partners() {
   return (
-    <section className="border-t border-white/5 py-24 md:py-40">
+    <section className="border-t border-black/5 py-24 md:py-40">
       <div className="px-6 md:px-10">
         <SectionHeader
           left="© Partners"
@@ -18,7 +18,7 @@ export function Partners() {
         </h2>
       </div>
 
-      <div className="space-y-6 border-y border-white/5 py-10">
+      <div className="space-y-6 border-y border-black/5 py-10">
         <Marquee direction="left" speed={50}>
           {partners.map((p) => (
             <PartnerLogo key={p.name + "-top"} name={p.name} url={p.url} />
@@ -40,7 +40,7 @@ function PartnerLogo({ name, url }: { name: string; url: string }) {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="font-display text-3xl uppercase tracking-tight text-muted-2 transition-colors hover:text-white md:text-5xl"
+      className="font-display text-3xl uppercase tracking-tight text-muted-2 transition-colors hover:text-black md:text-5xl"
       data-hover
     >
       {name}

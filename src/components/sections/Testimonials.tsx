@@ -7,7 +7,7 @@ import { RollButton } from "@/components/ui/RollButton";
 
 export function Testimonials() {
   return (
-    <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+    <section className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
         left="© Words"
         center="(WDX® — 06)"
@@ -35,13 +35,13 @@ export function Testimonials() {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 0.2 }}
             transition={{ duration: 0.7, delay: i * 0.06 }}
-            className="flex w-[85vw] shrink-0 snap-start flex-col justify-between rounded-2xl border border-white/10 bg-surface p-8 md:w-[480px] md:p-10"
+            className="flex w-[85vw] shrink-0 snap-start flex-col justify-between rounded-2xl border border-black/10 bg-surface p-8 md:w-[480px] md:p-10"
           >
             <blockquote className="font-display text-xl leading-snug md:text-2xl">
               “{t.quote}”
             </blockquote>
             <figcaption className="mt-10 flex items-center gap-4">
-              <div className="h-10 w-10 rounded-full bg-gradient-to-br from-white/20 to-white/5" />
+              <div className="h-10 w-10 rounded-full bg-gradient-to-br from-black/20 to-black/5" />
               <div>
                 <div className="text-sm">{t.name}</div>
                 <div className="text-xs text-muted">{t.role}</div>

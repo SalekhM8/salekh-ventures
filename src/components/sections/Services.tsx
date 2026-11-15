@@ -7,7 +7,7 @@ import { services } from "@/lib/data";
 
 export function Services() {
   return (
-    <section className="border-t border-white/5 px-6 py-24 md:px-10 md:py-40">
+    <section className="border-t border-black/5 px-6 py-24 md:px-10 md:py-40">
       <SectionHeader
         left="© Capabilities"
         center="(WDX® — 04)"
@@ -18,7 +18,7 @@ export function Services() {
         Six capabilities, one engineer. Every part of the build handled in-house.
       </h2>
 
-      <div className="grid grid-cols-1 gap-px bg-white/10 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-px bg-black/10 md:grid-cols-2 lg:grid-cols-3">
         {services.map((s, i) => (
           <ServiceCard key={s.n} item={s} index={i} />
         ))}
@@ -43,7 +43,7 @@ function ServiceCard({
       initial={{ opacity: 0, y: 30 }}
       animate={inView ? { opacity: 1, y: 0 } : {}}
       transition={{ duration: 0.7, delay: index * 0.06, ease: [0.22, 1, 0.36, 1] }}
-      className="group relative flex min-h-[260px] flex-col justify-between bg-black p-8 transition-colors hover:bg-surface md:p-10"
+      className="group relative flex min-h-[260px] flex-col justify-between bg-white p-8 transition-colors hover:bg-surface md:p-10"
     >
       <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-muted">
         <span>{item.n}</span>

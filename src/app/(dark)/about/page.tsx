@@ -59,26 +59,26 @@ export default function AboutPage() {
           </div>
 
           <div className="md:col-span-4 md:col-start-9">
-            <div className="grid grid-cols-2 gap-px bg-white/10">
-              <div className="bg-black p-6">
+            <div className="grid grid-cols-2 gap-px bg-black/10">
+              <div className="bg-white p-6">
                 <p className="font-display text-4xl">10+</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
                   Years
                 </p>
               </div>
-              <div className="bg-black p-6">
+              <div className="bg-white p-6">
                 <p className="font-display text-4xl">50+</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
                   Shipped projects
                 </p>
               </div>
-              <div className="bg-black p-6">
+              <div className="bg-white p-6">
                 <p className="font-display text-4xl">1000s</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
                   Users in production
                 </p>
               </div>
-              <div className="bg-black p-6">
+              <div className="bg-white p-6">
                 <p className="font-display text-4xl">1</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.2em] text-muted">
                   Senior engineer
