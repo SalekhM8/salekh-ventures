@@ -9,6 +9,7 @@ const PAGE_URL = "https://salekhventures.com/";
 export type TeamLead = {
   niche: string;
   departments: string[];
+  agents?: string[];
   followUp?: { question: string; answer: string };
   teamSize: string;
   revenue: string;
@@ -63,6 +64,7 @@ export async function submitTeamLead(input: TeamLead): Promise<TeamLeadResult> {
   const lead: TeamLead = {
     niche: clean(input.niche, 80),
     departments: Array.isArray(input.departments) ? input.departments.slice(0, 12).map((d) => clean(d, 60)) : [],
+    agents: Array.isArray(input.agents) ? input.agents.slice(0, 60).map((a) => clean(a, 60)).filter(Boolean) : [],
     followUp: input.followUp ? { question: clean(input.followUp.question, 120), answer: clean(input.followUp.answer, 80) } : undefined,
     teamSize: clean(input.teamSize, 40),
     revenue: clean(input.revenue, 60),
@@ -103,6 +105,7 @@ export async function submitTeamLead(input: TeamLead): Promise<TeamLeadResult> {
     "",
     `Kind of business: ${lead.niche}`,
     `Departments wanted: ${lead.departments.join(", ")}`,
+    `Agents picked (${lead.agents?.length ?? 0}): ${lead.agents?.length ? lead.agents.join(", ") : "none picked"}`,
     ...(lead.followUp ? [`${lead.followUp.question} ${lead.followUp.answer}`] : []),
     `Monthly revenue: ${lead.revenue || "-"}`,
     `Team size: ${lead.teamSize}`,

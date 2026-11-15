@@ -432,3 +432,12 @@ Checked by driving a separate headless Chrome at desktop and phone sizes: the pa
 - On a phone the grounds now show the four floors and the Oval Office as tags down the right edge. They had been hidden because the in-scene tags ran off the screen.
 - The browser's blue focus box on the question field was replaced with a rounded outline in the house's own colour.
 - The team form now also asks roughly what the business takes a month (five bands) and for a website or Instagram (optional). The mobile number was already required. The lead email's subject line carries the name, kind of business, revenue band and phone number.
+
+### S6. The catalogue of 55 agent jobs. Decided, 15 Nov 2026
+
+Salekh asked for "the 55 agents". No such list existed in the build, so one was drafted as a proposal and he approved it as written: 55 jobs across eight groups (Customer Relations 8, Outreach 8, Content 9, Ads 8, Data 7, Engineering 7, Research 5, Running the house 3). It lives in one file, `src/lib/agents.ts`, which the home page, the team form and the house all read.
+
+- Home page: the departments section is now the catalogue. A visitor opens a department and taps the agents they want. Their picks carry into the form, tick the matching departments, and are listed in the lead email.
+- House: a room's panel lists the agents that room can hold. Running several real agents in one room comes as each is built.
+- Only two of the 55 are built (Data: Daily Read, Research: Market Report). The page words them as jobs an agent is built and trained for, not as things already running.
+- Each one still needs, before it is real: a written job, the business's facts, access to the right system, test cases and a scorecard. Outreach also needs Salekh's tactics and his rule on what it may send unseen.

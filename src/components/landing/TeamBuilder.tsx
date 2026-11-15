@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { submitTeamLead } from "@/app/actions/teamLead";
+import { DEPARTMENT_OF } from "@/lib/agents";
+import { getPicks, usePicks } from "./picks";
 
 declare global {
   interface Window {
@@ -93,6 +95,7 @@ export function TeamBuilder() {
   const [step, setStep] = useState<StepId>("niche");
   const [niche, setNiche] = useState("");
   const [departments, setDepartments] = useState<string[]>([]);
+  const picks = usePicks();
   const [followAnswer, setFollowAnswer] = useState("");
   const [teamSize, setTeamSize] = useState("");
   const [revenue, setRevenue] = useState("");
@@ -125,11 +128,14 @@ export function TeamBuilder() {
     } catch {}
     const onOpen = (e: Event) => {
       const preset = (e as CustomEvent<{ niche?: string }>).detail?.niche;
+      // Agents ticked in the catalogue decide which departments start ticked.
+      const fromPicks = [...new Set(getPicks().map((n) => DEPARTMENT_OF[n]).filter((d): d is string => !!d && DEPARTMENTS.some((x) => x.id === d)))];
+      if (fromPicks.length) setDepartments((cur) => [...new Set([...cur, ...fromPicks])]);
       setFinePointer(window.matchMedia("(pointer: fine)").matches);
       setOpen(true);
       if (preset && (NICHES as readonly string[]).includes(preset)) {
         setNiche(preset);
-        setDepartments(SUGGESTED[preset] ?? []);
+        if (!fromPicks.length) setDepartments(SUGGESTED[preset] ?? []);
         setStep("departments");
       }
       if (!started.current) {
@@ -187,6 +193,7 @@ export function TeamBuilder() {
     const res = await submitTeamLead({
       niche,
       departments,
+      agents: picks,
       followUp: followUp && followAnswer ? { question: followUp.question, answer: followAnswer } : undefined,
       teamSize,
       revenue,
@@ -279,7 +286,11 @@ export function TeamBuilder() {
                     <>
                       <h2 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Which departments would you hand over?</h2>
                       <p className="mt-2 text-base text-black/60">
-                        {(SUGGESTED[niche] ?? []).length > 0 ? "I've ticked a common starting team for your kind of business. Change it to suit." : "Pick as many as you like."}
+                        {picks.length > 0
+                          ? `You picked ${picks.length} ${picks.length === 1 ? "agent" : "agents"}, so I've ticked their departments. Change anything you like.`
+                          : (SUGGESTED[niche] ?? []).length > 0
+                            ? "I've ticked a common starting team for your kind of business. Change it to suit."
+                            : "Pick as many as you like."}
                       </p>
                       <div className="mt-6 flex flex-col gap-2.5">
                         {DEPARTMENTS.map((d) => (
@@ -496,10 +507,11 @@ export function NicheChips() {
 
 /** Phone only: a bar that stays at the bottom of the screen. */
 export function StickyTeamBar() {
+  const picks = usePicks();
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-black/10 bg-white/95 p-3 backdrop-blur md:hidden" style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}>
       <button type="button" onClick={() => openTeamBuilder()} className="min-h-13 w-full rounded-full bg-black py-4 text-base font-semibold text-white">
-        Build your team
+        {picks.length > 0 ? `Build my team of ${picks.length}` : "Build your team"}
       </button>
     </div>
   );

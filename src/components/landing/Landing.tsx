@@ -1,17 +1,9 @@
 import Link from "next/link";
 import { fraunces } from "@/lib/fonts";
+import { AGENT_COUNT } from "@/lib/agents";
+import { AgentCatalogue } from "./AgentCatalogue";
 import { HouseDemo } from "./HouseDemo";
 import { NicheChips, StickyTeamBar, TeamBuilder, TeamButton } from "./TeamBuilder";
-
-const departments = [
-  { name: "Customer Relations", line: "Replies on WhatsApp, email, DMs and reviews, in your voice, from your own knowledge. Hands anything sensitive to a person." },
-  { name: "Outreach", line: "Finds the right people, writes to them properly and follows up. You take the calls and close." },
-  { name: "Content", line: "Scripts, captions and edited video. It tells you what to film and handles the rest." },
-  { name: "Ads", line: "Runs campaigns against your targets, inside the limits you set. Pauses what is losing and tells you why." },
-  { name: "Data", line: "Reads the numbers every day, works out what changed, and tells the other departments." },
-  { name: "Engineering", line: "Fixes bugs and ships small improvements to your code as changes a person reviews and merges." },
-  { name: "Research", line: "Reads your market and your competitors and writes it up, with sources." },
-];
 
 const steps = [
   { n: "01", title: "You set the targets", line: "The numbers each department chases, what it may spend, and what it may do without asking. Only you can change them." },
@@ -85,24 +77,18 @@ export function Landing() {
         </div>
       </section>
 
-      {/* departments */}
-      <section className="border-t border-black/10 px-6 py-20 md:px-10 md:py-28">
-        <div className="text-xs uppercase tracking-[0.2em] text-muted">(02) Departments</div>
+      {/* the catalogue of agents */}
+      <section id="agents" className="scroll-mt-20 border-t border-black/10 px-6 py-20 md:px-10 md:py-28">
+        <div className="text-xs uppercase tracking-[0.2em] text-muted">(02) The agents</div>
         <h2 className="mt-6 max-w-4xl font-display text-4xl font-semibold leading-[1.02] tracking-[-0.02em] md:text-6xl">
-          Pick the departments you want run.
+          {AGENT_COUNT} jobs an agent can take off your plate.
         </h2>
-        <ul className="mt-12 divide-y divide-black/10 border-y border-black/10">
-          {departments.map((d, i) => (
-            <li key={d.name} className="grid gap-2 py-6 md:grid-cols-[80px_1fr_1.6fr] md:items-baseline md:gap-8">
-              <span className="text-xs uppercase tracking-[0.2em] text-muted">{String(i + 1).padStart(2, "0")}</span>
-              <h3 className="font-display text-2xl font-semibold tracking-tight">{d.name}</h3>
-              <p className="max-w-xl text-base leading-relaxed text-muted-2">{d.line}</p>
-            </li>
-          ))}
-        </ul>
-        <div className="mt-10 flex flex-wrap items-center gap-4">
-          <TeamButton size="lg">Pick your departments</TeamButton>
-          <span className="text-sm text-muted">Takes about a minute. One question at a time.</span>
+        <p className="mt-5 max-w-2xl text-base leading-relaxed text-muted-2 md:text-lg">
+          Open a department and tap the ones you want. I build and train each one for your business: your facts, your
+          voice, your targets.
+        </p>
+        <div className="mt-10">
+          <AgentCatalogue />
         </div>
       </section>
 

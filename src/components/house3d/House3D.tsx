@@ -10,6 +10,10 @@ import { Interior } from "./Interior";
 import { FloorScene, ROOM_W, floorCamera, floorPan } from "./FloorScene";
 import { RUN_REFUSED, useLiveHouse } from "./live";
 import { Markdown } from "./Markdown";
+import { CATALOGUE } from "@/lib/agents";
+
+/* The house's department keys, matched to the catalogue of agent jobs. */
+const CATALOGUE_ID: Record<string, string> = { data: "data", ads: "ads", creative: "content", cr: "customer-relations", eng: "engineering", research: "research" };
 import {
   AMBER,
   C,
@@ -769,6 +773,17 @@ export default function House3D({
 
               {!collapsed && (
                 <>
+              <section className="mt-7">
+                <Eyebrow>Agents this room can hold</Eyebrow>
+                <ul className="mt-2 flex flex-col">
+                  {(CATALOGUE.find((d) => d.id === CATALOGUE_ID[room.dept])?.agents ?? []).map((a) => (
+                    <li key={a.name} className="border-b py-2" style={{ borderColor: C.panel }}>
+                      <div style={{ font: `600 14px/1.3 ${SANS}` }}>{a.name}</div>
+                      <div style={{ font: `400 13px/1.4 ${SANS}`, color: "#7a6a62" }}>{a.job}</div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
               <section className="mt-7">
                 <Eyebrow>Work made here</Eyebrow>
                 {roomSim.outputs.length === 0 && (
