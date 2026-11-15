@@ -37,11 +37,14 @@ type Loc = { place: "grounds" } | { place: "oval" } | { place: "floor"; floor: n
 
 const HOME = new THREE.Vector3(30, 20, 98);
 const TARGET = new THREE.Vector3(-9, 8.5, 6);
+/* Phones are tall and narrow, so the camera stands further back and looks straight at the house. */
+const HOME_PHONE = new THREE.Vector3(52, 34, 185);
+const TARGET_PHONE = new THREE.Vector3(0, 9, 6);
 const sceneKey = (l: Loc) => (l.place === "floor" ? `floor-${l.floor}` : l.place);
 
 /* ------------------------------ camera ----------------------------- */
 
-function Rig({ loc }: { loc: Loc }) {
+function Rig({ loc, phone }: { loc: Loc; phone: boolean }) {
   const look = useRef(new THREE.Vector3());
   const last = useRef("");
   const dp = useRef(new THREE.Vector3());
@@ -49,7 +52,7 @@ function Rig({ loc }: { loc: Loc }) {
 
   useFrame((state, dt) => {
     const cam = state.camera as THREE.PerspectiveCamera;
-    const key = sceneKey(loc);
+    const key = sceneKey(loc) + (phone ? ":phone" : "");
     const fresh = key !== last.current;
     if (fresh) last.current = key;
     const fov = (f: number) => {
@@ -61,8 +64,8 @@ function Rig({ loc }: { loc: Loc }) {
     if (loc.place === "grounds") {
       if (fresh) {
         fov(34);
-        cam.position.copy(HOME);
-        cam.lookAt(TARGET);
+        cam.position.copy(phone ? HOME_PHONE : HOME);
+        cam.lookAt(phone ? TARGET_PHONE : TARGET);
       }
       return;
     }
@@ -112,7 +115,24 @@ type Msg = { id: number; from: "you" | "chief"; text: string; rooms: string[] };
 
 /* ------------------------------ the page --------------------------- */
 
-export default function House3D({ demo = false, embedded = false }: { demo?: boolean; embedded?: boolean } = {}) {
+export default function House3D({
+  demo = false,
+  embedded = false,
+  preview = false,
+  lowPower = false,
+  paused = false,
+  onClose,
+}: {
+  demo?: boolean;
+  embedded?: boolean;
+  /** Canvas only, turning slowly, nothing to press. Used as the phone poster. */
+  preview?: boolean;
+  /** Phones: no shadows and a lower pixel ratio. */
+  lowPower?: boolean;
+  /** Stop drawing while off screen. */
+  paused?: boolean;
+  onClose?: () => void;
+} = {}) {
   const names = demo ? DEMO_NAMES : REAL_NAMES;
   const fname = (id: string) => names[id] ?? id;
   const reduced = useReducedMotion() ?? false;
@@ -131,6 +151,7 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
   const [viewing, setViewing] = useState<{ id: string; title: string; time: string; body: string } | null>(null);
   const [runMsg, setRunMsg] = useState("");
   const msgId = useRef(0);
+  const labelLayer = useRef<HTMLDivElement>(null);
   const live = useLiveHouse(!demo);
   const isLive = live.connected;
   const stopped = isLive ? live.stopped : stoppedLocal;
@@ -300,8 +321,8 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
 
   return (
     <div data-lenis-prevent={embedded ? undefined : true} className={embedded ? "relative h-full w-full overflow-hidden" : "fixed inset-0 overflow-hidden"} style={{ background: C.light, color: C.ink, cursor: "auto", fontFamily: SANS }}>
-      <Canvas shadows dpr={[1, 2]} camera={{ position: HOME.toArray(), fov: 34, near: 0.5, far: 1200 }}>
-        <Rig loc={loc} />
+      <Canvas shadows={!lowPower} dpr={lowPower ? [1, 1.5] : [1, 2]} frameloop={paused ? "never" : "always"} camera={{ position: HOME.toArray(), fov: 34, near: 0.5, far: 1200 }}>
+        <Rig loc={loc} phone={lowPower} />
         {loc.place === "oval" && (
           <>
             <color attach="background" args={["#2A1A12"]} />
@@ -319,6 +340,7 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
             couriers={couriers}
             onCourierDone={removeCourier}
             onSelect={goRoom}
+            layer={labelLayer as React.RefObject<HTMLElement>}
           />
         )}
         {loc.place === "grounds" && (
@@ -350,17 +372,19 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
               onEnter={() => go({ place: "oval" })}
               onFloor={(fi) => go({ place: "floor", floor: fi, room: null })}
               names={names}
+              layer={labelLayer as React.RefObject<HTMLElement>}
             />
             <OrbitControls
               makeDefault
-              target={TARGET}
+              target={lowPower ? TARGET_PHONE : TARGET}
               enablePan={false}
               enableZoom={!embedded}
               minDistance={34}
-              maxDistance={150}
+              maxDistance={lowPower ? 230 : 150}
               minPolarAngle={0.5}
               maxPolarAngle={1.5}
-              autoRotate={auto && !reduced}
+              enabled={!preview}
+              autoRotate={(auto || preview) && !reduced}
               autoRotateSpeed={0.35}
               enableDamping
               onStart={() => setAuto(false)}
@@ -369,27 +393,56 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
         )}
       </Canvas>
 
+      {/* floating labels from the 3D scene are drawn here */}
+      <div ref={labelLayer} className="pointer-events-none absolute inset-0 z-10 overflow-hidden" />
+
       {/* quick cream fade between places */}
       <motion.div className="pointer-events-none absolute inset-0" style={{ background: C.cream }} initial={false} animate={{ opacity: fade ? 1 : 0 }} transition={{ duration: 0.16 }} />
 
+      {!preview && (
+        <>
       {/* left: name and places */}
-      <div className="pointer-events-none absolute bottom-0 left-0 top-0 z-30 flex w-full max-w-[320px] flex-col gap-3 p-4 md:p-5">
-        <div style={{ ...card, padding: "16px 18px" }} className="pointer-events-auto flex items-center justify-between gap-3">
-          <div>
-            <Headline size={27}>The White House</Headline>
-            <div className="mt-1.5">
+      <div className="pointer-events-none absolute bottom-0 left-0 top-0 z-30 flex w-full flex-col gap-3 p-3 md:max-w-[320px] md:p-5">
+        <div style={{ ...card, padding: lowPower ? "10px 10px 10px 16px" : "16px 18px" }} className="pointer-events-auto flex items-center justify-between gap-3">
+          <div className="min-w-0 whitespace-nowrap">
+            <Headline size={lowPower ? 20 : 27}>The White House</Headline>
+            <div className={lowPower ? "hidden" : "mt-1.5"}>
               <Eyebrow color={isLive ? "#1c7046" : C.terracotta}>{isLive ? "Live · local runner" : demo ? "Interactive demo · simulated" : "Sample simulation · not live"}</Eyebrow>
             </div>
           </div>
-          <button type="button" onClick={() => setPlacesOpen((v) => !v)} className="md:hidden" style={{ ...btnGhost, minHeight: 44, padding: "0 14px" }} aria-expanded={placesOpen}>
-            Places
+          <div className="flex flex-none gap-1.5">
+            <button type="button" onClick={() => setPlacesOpen((v) => !v)} className="md:hidden" style={{ ...btnGhost, minHeight: 44, padding: "0 14px", borderColor: C.ink }} aria-expanded={placesOpen}>
+              Places
+            </button>
+            {onClose && (
+              <button type="button" onClick={onClose} style={{ ...btnPrimary, minHeight: 44, padding: "0 14px" }}>
+                Close
+              </button>
+            )}
+          </div>
+        </div>
+        {/* phones: status and stop sit under the name */}
+        <div className="pointer-events-auto flex items-center gap-2 md:hidden">
+          <div style={{ ...card, borderRadius: 999, padding: "0 12px", font: `500 12px/1 ${SANS}` }} className="flex min-h-11 flex-1 items-center justify-between gap-2 whitespace-nowrap tabular-nums">
+            <span className="flex items-center gap-1.5">
+              <Dot color={C.ink} size={7} /> Working <b>{stopped ? 0 : counts.working}</b>
+            </span>
+            <span className="flex items-center gap-1.5" style={{ color: STATE_TEXT.waiting }}>
+              <Dot color={AMBER} size={7} /> Needs you <b>{counts.waiting}</b>
+            </span>
+            <span className="flex items-center gap-1.5" style={{ color: counts.failed ? STATE_TEXT.failed : C.ink }}>
+              <Dot color={counts.failed ? RED : C.blush} size={7} /> Failed <b>{counts.failed}</b>
+            </span>
+          </div>
+          <button type="button" onClick={toggleStop} style={{ ...btnPrimary, minHeight: 44, padding: "0 16px", background: stopped ? GREEN : C.ink }}>
+            {stopped ? "Resume" : "Stop"}
           </button>
         </div>
         <div className={`pointer-events-auto min-h-0 flex-col ${placesOpen ? "flex" : "hidden"} md:flex`}>{places}</div>
       </div>
 
       {/* top: where you are, the counts, the stop button */}
-      <div className="pointer-events-none absolute right-0 top-0 z-30 flex flex-wrap items-center justify-end gap-2 p-4 md:p-5">
+      <div className="pointer-events-none absolute right-0 top-0 z-30 hidden flex-wrap items-center justify-end gap-2 p-5 md:flex">
         <nav aria-label="Where you are" style={{ ...card, borderRadius: 999, padding: "0 8px" }} className="pointer-events-auto hidden min-h-12 items-center md:flex">
           {crumbs.map((c, i) => (
             <span key={c.label} className="flex items-center">
@@ -429,7 +482,7 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             style={{ ...card, borderRadius: 999, padding: "13px 20px", font: `500 14px/1 ${SANS}` }}
-            className="absolute left-1/2 top-20 -translate-x-1/2"
+            className="absolute left-1/2 top-36 z-30 w-max max-w-[92%] -translate-x-1/2 md:top-20"
           >
             Stopped. Nothing runs and nothing is sent until you resume.
           </motion.div>
@@ -459,7 +512,7 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
             exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
             transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
             style={{ ...card }}
-            className="absolute inset-x-3 bottom-3 z-30 flex max-h-[62vh] flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[420px]"
+            className="absolute inset-x-3 bottom-3 z-30 flex max-h-[50%] flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[420px]"
           >
             <div data-lenis-prevent className="flex-1 overflow-y-auto p-6">
               <Eyebrow>
@@ -716,7 +769,7 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
             exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
             transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
             style={{ ...card }}
-            className="absolute inset-x-3 bottom-3 z-30 flex max-h-[62vh] flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[440px]"
+            className="absolute inset-x-3 bottom-3 z-30 flex max-h-[58%] flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[440px]"
           >
             <div className="p-6 pb-3">
               <Eyebrow>Oval Office</Eyebrow>
@@ -790,6 +843,8 @@ export default function House3D({ demo = false, embedded = false }: { demo?: boo
           </motion.aside>
         )}
       </AnimatePresence>
+        </>
+      )}
     </div>
   );
 }

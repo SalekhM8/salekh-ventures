@@ -32,7 +32,8 @@ export function Nav({ inverted = false }: { inverted?: boolean }) {
   return (
     <header
       className={clsx(
-        "fixed inset-x-0 top-0 z-50 transition-all duration-300",
+        // Steps aside while the house or the form is open full screen.
+        "fixed inset-x-0 top-0 z-50 transition-all duration-300 [html[data-overlay]_&]:invisible",
         scrolled ? `border-b ${border} ${scrolledBg} backdrop-blur-md` : "bg-transparent"
       )}
     >

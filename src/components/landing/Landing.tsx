@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { RollButton } from "@/components/ui/RollButton";
 import { fraunces } from "@/lib/fonts";
 import { HouseDemo } from "./HouseDemo";
+import { NicheChips, StickyTeamBar, TeamBuilder, TeamButton } from "./TeamBuilder";
 
 const departments = [
   { name: "Customer Relations", line: "Replies on WhatsApp, email, DMs and reviews, in your voice, from your own knowledge. Hands anything sensitive to a person." },
@@ -23,14 +23,8 @@ export function Landing() {
   return (
     <>
       {/* hero: the offer, then the house itself */}
-      <section className="px-4 pb-10 pt-28 md:px-10 md:pt-32">
-        <div className="grid grid-cols-3 items-baseline text-xs uppercase tracking-[0.2em] text-muted">
-          <span>© Salekh Ventures</span>
-          <span className="text-center">AI departments</span>
-          <span className="text-right">Ten clients</span>
-        </div>
-
-        <div className="mt-8 grid items-end gap-6 md:mt-10 md:grid-cols-[1.5fr_1fr] md:gap-12">
+      <section className="px-4 pb-10 pt-24 md:px-10 md:pt-28">
+        <div className="grid items-end gap-6 md:grid-cols-[1.5fr_1fr] md:gap-12">
           <h1 className="font-display text-[11.5vw] font-semibold leading-[0.92] tracking-[-0.03em] md:text-[5.6vw]">
             AI departments that run your business. You stay president.
           </h1>
@@ -40,10 +34,8 @@ export function Landing() {
               You set the targets, approve the big calls and score the work.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <RollButton href="/contact" size="md" variant="primary">
-                Message Salekh
-              </RollButton>
-              <a href="#house" className="text-sm underline underline-offset-4" data-hover>
+              <TeamButton>Build your team</TeamButton>
+              <a href="#house" className="inline-flex min-h-12 items-center text-sm underline underline-offset-4" data-hover>
                 Try the house below
               </a>
             </div>
@@ -56,9 +48,9 @@ export function Landing() {
               <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
               The White House · a simulation you can use
             </span>
-            <span>Click a floor, a window or the garden door</span>
+            <span className="hidden md:inline">Click a floor, a window or the garden door</span>
           </div>
-          <div className="h-[78vh] min-h-[560px] overflow-hidden rounded-3xl border border-black/10">
+          <div className="h-[62vh] min-h-[400px] overflow-hidden rounded-3xl border border-black/10 md:h-[78vh] md:min-h-[560px]">
             <HouseDemo />
           </div>
           <p className="mt-3 max-w-3xl text-sm leading-relaxed text-muted">
@@ -66,6 +58,13 @@ export function Landing() {
             client or real data. Walk into a room to see what an agent is doing and what it has made, approve or reject
             what it asks for, and go to the Oval Office to question the Chief of Staff.
           </p>
+        </div>
+
+        <div className="mt-12 border-t border-black/10 pt-8">
+          <h2 className="font-display text-2xl font-semibold tracking-tight md:text-3xl">What do you run? I&apos;ll show you a starting team.</h2>
+          <div className="mt-5">
+            <NicheChips />
+          </div>
         </div>
       </section>
 
@@ -101,6 +100,10 @@ export function Landing() {
             </li>
           ))}
         </ul>
+        <div className="mt-10 flex flex-wrap items-center gap-4">
+          <TeamButton size="lg">Pick your departments</TeamButton>
+          <span className="text-sm text-muted">Takes about a minute. One question at a time.</span>
+        </div>
       </section>
 
       {/* control */}
@@ -121,7 +124,7 @@ export function Landing() {
       </section>
 
       {/* close */}
-      <section className="border-t border-black/10 px-6 py-24 md:px-10 md:py-36">
+      <section className="border-t border-black/10 px-6 pb-36 pt-24 md:px-10 md:py-36">
         <div className="text-xs uppercase tracking-[0.2em] text-muted">(04) Working together</div>
         <h2 className="mt-6 max-w-5xl font-display text-5xl font-semibold leading-[0.98] tracking-[-0.03em] md:text-8xl">
           Ten clients. No more.
@@ -131,14 +134,15 @@ export function Landing() {
           yours up by hand: your facts, your voice, your targets, your standards. That is why the number is small.
         </p>
         <div className="mt-10 flex flex-wrap items-center gap-5">
-          <RollButton href="/contact" size="lg" variant="primary">
-            Message Salekh
-          </RollButton>
+          <TeamButton size="lg">Build your team</TeamButton>
           <Link href="/work" className="text-sm underline underline-offset-4" data-hover>
             Looking for development work instead? See past builds
           </Link>
         </div>
       </section>
+
+      <StickyTeamBar />
+      <TeamBuilder />
     </>
   );
 }

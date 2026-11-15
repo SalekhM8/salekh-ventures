@@ -44,7 +44,7 @@ export function floorCamera(floorIndex: number, focusId: string | null, aspect: 
   if (focus && focus.floorIndex === floorIndex) {
     const x = roomX(focus.slot, n);
     const wide = aspect > 1.25;
-    return { pos: [x + (wide ? 0.3 : 0), 3.4, wide ? 12.5 : 13], look: [x + (wide ? 0.7 : 0), 2.3, -3.6] };
+    return { pos: [x + (wide ? 0.3 : 0), wide ? 3.4 : 5, wide ? 12.5 : 15], look: [x + (wide ? 0.7 : 0), wide ? 2.3 : -1.6, -3.6] };
   }
   const width = n * ROOM_W + 1.5;
   const wide = aspect > 1.25;
@@ -360,8 +360,10 @@ function RoomBox({
   dimmed,
   showLabel,
   labelScale,
+  layer,
   onSelect,
 }: {
+  layer: React.RefObject<HTMLElement>;
   labelScale: number;
   room: Room;
   x: number;
@@ -496,7 +498,7 @@ function RoomBox({
       <Sign state={state} />
 
       {showLabel && (
-        <Html position={[0, WALL_H + 1.05, -D]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none", opacity: dimmed ? 0.35 : 1 }}>
+        <Html portal={layer} position={[0, WALL_H + 1.05, -D]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none", opacity: dimmed ? 0.35 : 1 }}>
           <div
             style={{
               width: 132,
@@ -563,7 +565,9 @@ export function FloorScene({
   couriers,
   onCourierDone,
   onSelect,
+  layer,
 }: {
+  layer: React.RefObject<HTMLElement>;
   floorIndex: number;
   focusId: string | null;
   sim: Sim;
@@ -657,6 +661,7 @@ export function FloorScene({
             dimmed={!!focusId && focusId !== room.id}
             showLabel={!focusId}
             labelScale={labelScale}
+            layer={layer}
             onSelect={onSelect}
           />
         );

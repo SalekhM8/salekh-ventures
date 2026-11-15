@@ -53,6 +53,9 @@ const MAT = {
   groove: std("#CFC9BB", 1),
 };
 
+/* Labels are drawn into a layer the house owns, not into the canvas wrapper. */
+export type Layer = React.RefObject<HTMLElement>;
+
 const SZ = 13; // south wall
 const arc = (a: number, r: number, y: number): Vec3 => [Math.sin(a) * r, y, SZ + Math.cos(a) * r];
 
@@ -160,8 +163,10 @@ function RoomWindow({
   hood,
   showLabel,
   floorLabel,
+  layer,
   onSelect,
 }: {
+  layer: Layer;
   floorLabel: string;
   room: Room;
   state: RoomState;
@@ -213,7 +218,7 @@ function RoomWindow({
       </mesh>
       <WindowFrame w={room.w} h={room.h} hood={hood} />
       {showLabel && (state === "waiting" || state === "failed" || hover) && (
-        <Html position={[0, room.h / 2 + 1.05, 0.6]} center distanceFactor={36} zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
+        <Html portal={layer} position={[0, room.h / 2 + 1.05, 0.6]} center distanceFactor={36} zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
           <div
             style={{
               whiteSpace: "nowrap",
@@ -429,7 +434,9 @@ export function WhiteHouse({
   onEnter,
   onFloor,
   names,
+  layer,
 }: {
+  layer: Layer;
   names: Record<string, string>;
   sim: Sim;
   stopped: boolean;
@@ -777,7 +784,7 @@ export function WhiteHouse({
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
       {front && (
-        <Html position={[0, 0.5, 25]} center distanceFactor={36} zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
+        <Html portal={layer} position={[0, 0.5, 25]} center distanceFactor={36} zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
           <div
             style={{
               whiteSpace: "nowrap",
@@ -848,13 +855,13 @@ export function WhiteHouse({
         const state: RoomState = stopped ? "idle" : (sim[room.id]?.state ?? "idle");
         const bi = SIDE_BAYS.indexOf(room.pos[0]);
         const hood: Hood = room.floorIndex === 2 ? (bi % 2 === 0 ? "tri" : "arc") : undefined;
-        return <RoomWindow key={room.id} room={room} state={state} hood={hood} showLabel={front} floorLabel={names[room.floorId] ?? room.floorName} onSelect={onSelect} />;
+        return <RoomWindow key={room.id} room={room} state={state} hood={hood} showLabel={front} floorLabel={names[room.floorId] ?? room.floorName} layer={layer} onSelect={onSelect} />;
       })}
 
       {/* floor names */}
       {front &&
         FLOORS.map((f, fi) => (
-          <Html key={f.id} position={[27.6, FLOOR_WIN[fi]?.y ?? 0, 13.4]} center distanceFactor={36} zIndexRange={[20, 0]}>
+          <Html portal={layer} key={f.id} position={[27.6, FLOOR_WIN[fi]?.y ?? 0, 13.4]} center distanceFactor={36} zIndexRange={[20, 0]}>
             <button
               type="button"
               onClick={() => onFloor(fi)}

@@ -404,3 +404,17 @@ At Salekh's request the site's colours were inverted (white ground, black type) 
 - The old home page sections (studio hero, services, pricing, testimonials, FAQ) are no longer on the home page. Their components are still in the repo, and /work, /about, /journal and /contact remain. The "Sync" link was removed from the navigation because that offer became Mastore; the page itself still exists.
 - Copy makes no claims about results. It says the system is being built on Salekh's own businesses first.
 - Not committed, not deployed. Deploying needs Salekh's go-ahead.
+
+### S3. Home page: team form, phone version. Decided, 15 Nov 2026
+
+At Salekh's request, after seeing the first live version:
+
+- The small header row above the headline was removed.
+- "Message Salekh" was replaced by "Build your team": a form that asks one question at a time (kind of business, departments, one follow-up chosen from the departments picked, team size, timing, name, mobile number, optional email). Picking a kind of business ticks a suggested starting team. The mobile number is required. The lead is emailed to Salekh through the site's existing email set-up and sent to Meta as a Lead, the same way the earlier lead form worked.
+- The button appears in the hero, after the departments, at the close, and as a bar fixed to the bottom of the screen on phones. Chips under the hero open the form with the kind of business already chosen.
+- Phones: the house shows as a slowly turning picture that does not capture swipes, so the page scrolls. Tapping it opens the house full screen with its own phone layout. Shadows are off and the pixel ratio is lower on phones, and the scene stops drawing while off screen.
+- Fixed: the 3D scene's floating labels now draw into a layer the house owns. Before, removing a label could throw an error.
+
+Salekh mentioned "55 possible agents". No such list has been agreed in this build: there are seven department types. The form offers those seven until he supplies a longer list.
+
+Checked by driving a separate headless Chrome at desktop and phone sizes: the page, the whole form (the test lead arrived with every answer) and the phone walk through the house.
