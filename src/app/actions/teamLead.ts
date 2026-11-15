@@ -11,9 +11,11 @@ export type TeamLead = {
   departments: string[];
   followUp?: { question: string; answer: string };
   teamSize: string;
+  revenue: string;
   timing: string;
   name: string;
   business: string;
+  website?: string;
   phone: string;
   email?: string;
   attribution?: string;
@@ -63,9 +65,11 @@ export async function submitTeamLead(input: TeamLead): Promise<TeamLeadResult> {
     departments: Array.isArray(input.departments) ? input.departments.slice(0, 12).map((d) => clean(d, 60)) : [],
     followUp: input.followUp ? { question: clean(input.followUp.question, 120), answer: clean(input.followUp.answer, 80) } : undefined,
     teamSize: clean(input.teamSize, 40),
+    revenue: clean(input.revenue, 60),
     timing: clean(input.timing, 60),
     name: clean(input.name, 80),
     business: clean(input.business, 120),
+    website: clean(input.website, 160) || undefined,
     phone: clean(input.phone, 30),
     email: clean(input.email, 120) || undefined,
   };
@@ -92,13 +96,15 @@ export async function submitTeamLead(input: TeamLead): Promise<TeamLeadResult> {
 
   const text = [
     `Name: ${lead.name}`,
-    `Business: ${lead.business || "-"}`,
     `Phone: ${lead.phone}`,
+    `Business: ${lead.business || "-"}`,
+    `Website or social: ${lead.website ?? "-"}`,
     `Email: ${lead.email ?? "-"}`,
     "",
     `Kind of business: ${lead.niche}`,
     `Departments wanted: ${lead.departments.join(", ")}`,
     ...(lead.followUp ? [`${lead.followUp.question} ${lead.followUp.answer}`] : []),
+    `Monthly revenue: ${lead.revenue || "-"}`,
     `Team size: ${lead.teamSize}`,
     `Timing: ${lead.timing}`,
     ...(attribution.length ? ["", "Came from:", ...attribution] : []),
@@ -122,7 +128,7 @@ export async function submitTeamLead(input: TeamLead): Promise<TeamLeadResult> {
         from,
         to,
         ...(lead.email ? { reply_to: lead.email } : {}),
-        subject: `AI TEAM LEAD: ${lead.name}, ${lead.niche} (${lead.departments.length} departments)`,
+        subject: `AI TEAM LEAD: ${lead.name}, ${lead.niche}, ${lead.revenue || "revenue not given"} (${lead.phone})`,
         text,
       }),
     });

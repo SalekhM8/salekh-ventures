@@ -58,7 +58,9 @@ const FOLLOW_UPS: { dept: string; question: string; options: string[] }[] = [
   { dept: "Engineering", question: "Who looks after your site or app today?", options: ["I do", "A developer or agency", "Nobody really"] },
 ];
 
-type StepId = "niche" | "departments" | "followUp" | "teamSize" | "timing" | "who" | "contact" | "done";
+type StepId = "niche" | "departments" | "followUp" | "teamSize" | "revenue" | "timing" | "who" | "contact" | "done";
+
+const REVENUE = ["Under £5,000", "£5,000 to £20,000", "£20,000 to £50,000", "£50,000 to £100,000", "Over £100,000"];
 
 const track = (event: string, props?: Record<string, unknown>) => {
   try {
@@ -93,7 +95,9 @@ export function TeamBuilder() {
   const [departments, setDepartments] = useState<string[]>([]);
   const [followAnswer, setFollowAnswer] = useState("");
   const [teamSize, setTeamSize] = useState("");
+  const [revenue, setRevenue] = useState("");
   const [timing, setTiming] = useState("");
+  const [website, setWebsite] = useState("");
   const [name, setName] = useState("");
   const [business, setBusiness] = useState("");
   const [phone, setPhone] = useState("");
@@ -106,7 +110,7 @@ export function TeamBuilder() {
 
   const followUp = useMemo(() => FOLLOW_UPS.find((f) => departments.includes(f.dept)), [departments]);
   const steps = useMemo<StepId[]>(
-    () => ["niche", "departments", ...(followUp ? (["followUp"] as StepId[]) : []), "teamSize", "timing", "who", "contact"],
+    () => ["niche", "departments", ...(followUp ? (["followUp"] as StepId[]) : []), "teamSize", "revenue", "timing", "who", "contact"],
     [followUp],
   );
   const index = steps.indexOf(step);
@@ -182,9 +186,11 @@ export function TeamBuilder() {
       departments,
       followUp: followUp && followAnswer ? { question: followUp.question, answer: followAnswer } : undefined,
       teamSize,
+      revenue,
       timing,
       name,
       business,
+      website,
       phone,
       email,
       attribution: attribution.current,
@@ -296,7 +302,19 @@ export function TeamBuilder() {
                       <h2 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">How many people work in the business today?</h2>
                       <div className="mt-6 flex flex-col gap-2.5">
                         {["Just me", "2 to 5", "6 to 20", "More than 20"].map((o) => (
-                          <Choice key={o} label={o} selected={teamSize === o} onClick={() => pickThenNext(setTeamSize, o, "timing")} />
+                          <Choice key={o} label={o} selected={teamSize === o} onClick={() => pickThenNext(setTeamSize, o, "revenue")} />
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {step === "revenue" && (
+                    <>
+                      <h2 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Roughly what does the business take a month?</h2>
+                      <p className="mt-2 text-base text-black/60">A rough band is fine. It tells me what size of team makes sense.</p>
+                      <div className="mt-6 flex flex-col gap-2.5">
+                        {REVENUE.map((o) => (
+                          <Choice key={o} label={o} selected={revenue === o} onClick={() => pickThenNext(setRevenue, o, "timing")} />
                         ))}
                       </div>
                     </>
@@ -330,6 +348,18 @@ export function TeamBuilder() {
                           value={business}
                           onChange={(e) => setBusiness(e.target.value)}
                           autoComplete="organization"
+                          enterKeyHint="next"
+                        />
+                        <label className="mt-2 text-sm font-medium" htmlFor="tb-website">
+                          Website or Instagram <span className="font-normal text-black/50">(optional)</span>
+                        </label>
+                        <input
+                          id="tb-website"
+                          className={input}
+                          value={website}
+                          onChange={(e) => setWebsite(e.target.value)}
+                          autoComplete="url"
+                          autoCapitalize="none"
                           enterKeyHint="next"
                           onKeyDown={(e) => {
                             if (e.key === "Enter" && name.trim()) next();
@@ -414,7 +444,7 @@ export function TeamBuilder() {
                       {sending ? "Sending…" : "Send it to Salekh"}
                     </button>
                   )}
-                  {(step === "niche" || step === "followUp" || step === "teamSize" || step === "timing") && <span className="ml-auto text-sm text-black/50">Tap an answer to continue</span>}
+                  {(step === "niche" || step === "followUp" || step === "teamSize" || step === "revenue" || step === "timing") && <span className="ml-auto text-sm text-black/50">Tap an answer to continue</span>}
                 </>
               )}
             </div>
