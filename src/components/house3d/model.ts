@@ -333,6 +333,20 @@ export function answer(question: string, sim: Sim, stopped: boolean, names: Name
     (k) => q.includes(DEPTS[k].name.toLowerCase()) || (k === "cr" && q.includes("customer")) || (k === "eng" && q.includes("engineer")) || (k === "research" && q.includes("market")),
   );
 
+  const isDemo = names !== REAL_NAMES;
+  if (/(what is this|what are you|who are you|how does (this|it) work|what do you do|explain)/.test(q)) {
+    return {
+      text: "Each floor is a business and each room is a department with its own agent. I decide who works on what, pass work between rooms, and bring you the calls that need a person. Ask me what needs you, or walk into any room to see the work.",
+      rooms: [],
+    };
+  }
+  if (/(price|pricing|cost|how much|fee)/.test(q)) {
+    return { text: "That depends on which departments you would hand over. Use Build your team on the page and Salekh will come back to you personally.", rooms: [] };
+  }
+  if (isDemo && /(real|fake|simulat|demo|live)/.test(q)) {
+    return { text: "This is a simulation with made up businesses, so you can see how the system behaves. Nothing here is a real client or real data.", rooms: [] };
+  }
+
   if (/(need|approv|waiting|my yes|decide)/.test(q)) {
     const rooms = ROOMS.filter((r) => sim[r.id]?.state === "waiting");
     if (!rooms.length) return { text: "Nothing is waiting on you right now.", rooms: [] };
@@ -354,5 +368,15 @@ export function answer(question: string, sim: Sim, stopped: boolean, names: Name
     const head = floor && !dept ? `On ${fn(floor.id)}: ` : dept && !floor ? `${DEPTS[dept].name} across the house: ` : "";
     return { text: `${head}${rooms.map((r) => (floor && !dept ? describe(r) : `${fn(r.floorId)}: ${describe(r)}`)).join(". ")}.`, rooms: rooms.map((r) => r.id).slice(0, 5) };
   }
-  return { text: briefing(sim, stopped, names), rooms: ROOMS.filter((r) => sim[r.id]?.state === "waiting").map((r) => r.id) };
+  if (/(today|happen|overall|summary|update|going on|status|brief|everything)/.test(q)) {
+    const made = ROOMS.reduce((n, r) => n + (sim[r.id]?.outputs.length ?? 0), 0);
+    return {
+      text: `${briefing(sim, stopped, names)} ${made ? `${made} ${made === 1 ? "piece of work has" : "pieces of work have"} been finished so far.` : "No work has been finished yet."}`,
+      rooms: ROOMS.filter((r) => sim[r.id]?.state === "waiting").map((r) => r.id),
+    };
+  }
+  return {
+    text: "I can tell you what needs you, what has failed, what has been finished, or how any floor or department is doing. Try one of the questions below, or name a department.",
+    rooms: [],
+  };
 }

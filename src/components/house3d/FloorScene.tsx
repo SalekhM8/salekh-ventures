@@ -37,7 +37,16 @@ export function roomX(slot: number, count: number) {
   return (slot - (count - 1) / 2) * ROOM_W;
 }
 
-export function floorCamera(floorIndex: number, focusId: string | null, aspect: number): { pos: Vec3; look: Vec3 } {
+/** Phones: keeps a sideways swipe inside the ends of the floor. */
+export function floorPan(floorIndex: number, pan: number) {
+  const n = FLOORS[floorIndex]?.depts.length ?? 3;
+  if (n <= 2) return 0;
+  const min = roomX(0, n) + ROOM_W * 0.5;
+  const max = roomX(n - 1, n) - ROOM_W * 0.5;
+  return Math.min(max, Math.max(min, pan));
+}
+
+export function floorCamera(floorIndex: number, focusId: string | null, aspect: number, pan = -1e6): { pos: Vec3; look: Vec3 } {
   const floor = FLOORS[floorIndex];
   const n = floor?.depts.length ?? 3;
   const focus = focusId ? ROOM_BY_ID[focusId] : undefined;
@@ -49,6 +58,12 @@ export function floorCamera(floorIndex: number, focusId: string | null, aspect: 
   const width = n * ROOM_W + 1.5;
   const wide = aspect > 1.25;
   const tan = Math.tan((38 * Math.PI) / 360);
+  if (!wide) {
+    // Tall screens show about two rooms and are swiped sideways.
+    const dist = Math.max(12, (2.15 * ROOM_W) / 2 / (tan * aspect));
+    const x = floorPan(floorIndex, pan);
+    return { pos: [x, 5.6 + dist * 0.12, dist + 1], look: [x, 1.9, -3.2] };
+  }
   const frac = wide ? 0.7 : 1; // the Places list covers the left of a wide screen
   const dist = Math.max(12, width / 2 / (tan * aspect * frac));
   const shift = wide ? (2 * dist * tan * aspect * (1 - frac)) / 2 : 0;
@@ -390,6 +405,7 @@ function RoomBox({
       position={[x, 0, 0]}
       onClick={(e) => {
         e.stopPropagation();
+        if (e.delta > 8) return; // a swipe, not a tap
         document.body.style.cursor = "";
         onSelect(room.id);
       }}

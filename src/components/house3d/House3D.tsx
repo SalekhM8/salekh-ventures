@@ -7,7 +7,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as THREE from "three";
 import { WhiteHouse } from "./WhiteHouse";
 import { Interior } from "./Interior";
-import { FloorScene, floorCamera } from "./FloorScene";
+import { FloorScene, ROOM_W, floorCamera, floorPan } from "./FloorScene";
 import { RUN_REFUSED, useLiveHouse } from "./live";
 import { Markdown } from "./Markdown";
 import {
@@ -44,7 +44,7 @@ const sceneKey = (l: Loc) => (l.place === "floor" ? `floor-${l.floor}` : l.place
 
 /* ------------------------------ camera ----------------------------- */
 
-function Rig({ loc, phone }: { loc: Loc; phone: boolean }) {
+function Rig({ loc, phone, pan }: { loc: Loc; phone: boolean; pan: React.RefObject<number> }) {
   const look = useRef(new THREE.Vector3());
   const last = useRef("");
   const dp = useRef(new THREE.Vector3());
@@ -75,7 +75,7 @@ function Rig({ loc, phone }: { loc: Loc; phone: boolean }) {
       dl.current.set(-1.2, 2.2, 3);
     } else {
       fov(38);
-      const c = floorCamera(loc.floor, loc.room, state.size.width / state.size.height);
+      const c = floorCamera(loc.floor, loc.room, state.size.width / state.size.height, pan.current);
       dp.current.set(c.pos[0] + state.pointer.x * 0.5, c.pos[1] + state.pointer.y * 0.25, c.pos[2]);
       dl.current.set(...c.look);
     }
@@ -108,10 +108,20 @@ function Dot({ color, size = 9 }: { color: string; size?: number }) {
   return <span style={{ display: "inline-block", flex: "none", width: size, height: size, borderRadius: size, background: color }} />;
 }
 
+/* Phones: a tab at the top of a bottom sheet that folds it down or opens it up. */
+function SheetHandle({ open, onToggle, label }: { open: boolean; onToggle: () => void; label: string }) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full flex-none flex-col items-center gap-1.5 pb-1.5 pt-2.5 md:hidden">
+      <span style={{ width: 44, height: 5, borderRadius: 5, background: C.blush }} />
+      <span style={{ font: `600 10.5px/1.3 ${SANS}`, letterSpacing: "0.14em", textTransform: "uppercase", color: C.terracotta }}>{open ? "Fold down" : label}</span>
+    </button>
+  );
+}
+
 const btnPrimary: CSSProperties = { minHeight: 46, padding: "0 20px", borderRadius: 999, background: C.ink, color: C.surface, font: `600 14px/1 ${SANS}`, cursor: "pointer" };
 const btnGhost: CSSProperties = { minHeight: 46, padding: "0 18px", borderRadius: 999, background: "transparent", color: C.ink, border: `1.5px solid ${C.blush}`, font: `600 14px/1 ${SANS}`, cursor: "pointer" };
 
-type Msg = { id: number; from: "you" | "chief"; text: string; rooms: string[] };
+type Msg = { id: number; from: "you" | "chief"; text: string; rooms: string[]; time: string };
 
 /* ------------------------------ the page --------------------------- */
 
@@ -152,6 +162,13 @@ export default function House3D({
   const [runMsg, setRunMsg] = useState("");
   const msgId = useRef(0);
   const labelLayer = useRef<HTMLDivElement>(null);
+  /* Phones: the bottom sheet starts folded down so the scene stays visible. */
+  const [sheet, setSheet] = useState(false);
+  const collapsed = lowPower && !sheet;
+  const chatBox = useRef<HTMLDivElement>(null);
+  /* Phones: swipe sideways along a floor. */
+  const pan = useRef(-1e6);
+  const drag = useRef<{ x: number; start: number } | null>(null);
   const live = useLiveHouse(!demo);
   const isLive = live.connected;
   const stopped = isLive ? live.stopped : stoppedLocal;
@@ -198,12 +215,14 @@ export default function House3D({
   const say = (from: Msg["from"], text: string, rooms: string[] = []) => {
     msgId.current += 1;
     const id = msgId.current;
-    setChat((c) => [...c, { id, from, text, rooms }].slice(-12));
+    setChat((c) => [...c, { id, from, text, rooms, time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) }].slice(-12));
   };
 
   const go = (next: Loc) => {
     setAuto(false);
     setPlacesOpen(false);
+    setSheet(false);
+    if (next.place === "floor" && (loc.place !== "floor" || loc.floor !== next.floor)) pan.current = -1e6;
     setScoring(null);
     setViewing(null);
     setRunMsg("");
@@ -242,6 +261,7 @@ export default function House3D({
     const text = q.trim();
     if (!text) return;
     setDraft("");
+    setSheet(true);
     say("you", text);
     const a = answer(text, sim, stopped, names);
     setTimeout(() => {
@@ -250,10 +270,16 @@ export default function House3D({
     }, 320);
   };
 
+  useEffect(() => {
+    const el = chatBox.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat, sheet]);
+
   const room = loc.place === "floor" && loc.room ? ROOM_BY_ID[loc.room] : undefined;
   const roomSim = room ? sim[room.id] : undefined;
   const roomState: RoomState = room ? stateOf(room.id) : "idle";
   const floorRooms = loc.place === "floor" ? ROOMS.filter((r) => r.floorIndex === loc.floor) : [];
+  const panning = lowPower && !preview && loc.place === "floor" && !loc.room && floorRooms.length > 2;
   const crumbs: { label: string; to: Loc }[] = [{ label: "Grounds", to: { place: "grounds" } }];
   if (loc.place === "oval") crumbs.push({ label: "Oval Office", to: loc });
   if (loc.place === "floor") {
@@ -320,9 +346,21 @@ export default function House3D({
   );
 
   return (
-    <div data-lenis-prevent={embedded ? undefined : true} className={embedded ? "relative h-full w-full overflow-hidden" : "fixed inset-0 overflow-hidden"} style={{ background: C.light, color: C.ink, cursor: "auto", fontFamily: SANS }}>
+    <div data-lenis-prevent={embedded ? undefined : true} className={embedded ? "relative h-full w-full overflow-hidden" : "fixed inset-0 overflow-hidden"}
+      style={{ background: C.light, color: C.ink, cursor: "auto", fontFamily: SANS, touchAction: panning ? "pan-y" : undefined }}
+      onPointerDown={(e) => {
+        if (panning) drag.current = { x: e.clientX, start: floorPan(loc.place === "floor" ? loc.floor : 0, pan.current) };
+      }}
+      onPointerMove={(e) => {
+        if (!panning || !drag.current) return;
+        const perPx = (2.15 * ROOM_W) / Math.max(1, window.innerWidth);
+        pan.current = floorPan(loc.place === "floor" ? loc.floor : 0, drag.current.start - (e.clientX - drag.current.x) * perPx);
+      }}
+      onPointerUp={() => (drag.current = null)}
+      onPointerCancel={() => (drag.current = null)}
+    >
       <Canvas shadows={!lowPower} dpr={lowPower ? [1, 1.5] : [1, 2]} frameloop={paused ? "never" : "always"} camera={{ position: HOME.toArray(), fov: 34, near: 0.5, far: 1200 }}>
-        <Rig loc={loc} phone={lowPower} />
+        <Rig loc={loc} phone={lowPower} pan={pan} />
         {loc.place === "oval" && (
           <>
             <color attach="background" args={["#2A1A12"]} />
@@ -372,6 +410,7 @@ export default function House3D({
               onEnter={() => go({ place: "oval" })}
               onFloor={(fi) => go({ place: "floor", floor: fi, room: null })}
               names={names}
+              phone={lowPower}
               layer={labelLayer as React.RefObject<HTMLElement>}
             />
             <OrbitControls
@@ -497,7 +536,7 @@ export default function House3D({
       )}
       {loc.place === "floor" && !room && (
         <div style={{ ...card, borderRadius: 999, padding: "13px 20px", font: `500 13.5px/1.3 ${SANS}` }} className="absolute bottom-5 left-1/2 -translate-x-1/2">
-          {fname(FLOORS[loc.floor]?.id ?? "")}: click a room to step in.
+          {panning ? "Swipe sideways for more rooms. Tap a room to step in." : `${fname(FLOORS[loc.floor]?.id ?? "")}: click a room to step in.`}
         </div>
       )}
 
@@ -512,18 +551,19 @@ export default function House3D({
             exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
             transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
             style={{ ...card }}
-            className="absolute inset-x-3 bottom-3 z-30 flex max-h-[50%] flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[420px]"
+            className={`absolute inset-x-3 bottom-3 z-30 flex flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[420px] ${collapsed ? "max-h-[46%]" : "max-h-[78%]"}`}
           >
-            <div data-lenis-prevent className="flex-1 overflow-y-auto p-6">
+            <SheetHandle open={sheet} onToggle={() => setSheet((v) => !v)} label="Show work and history" />
+            <div data-lenis-prevent className="flex-1 overflow-y-auto px-5 pb-4 pt-1 md:p-6">
               <Eyebrow>
                 Floor {room.level} · {fname(room.floorId)}
               </Eyebrow>
               <div className="mt-1 flex items-center gap-3">
                 <Dot color={DEPTS[room.dept].color} size={12} />
-                <Headline size={38}>{DEPTS[room.dept].name}</Headline>
+                <Headline size={lowPower ? 28 : 38}>{DEPTS[room.dept].name}</Headline>
               </div>
 
-              <section className="mt-6">
+              <section className="mt-4 md:mt-6">
                 <Eyebrow>Now</Eyebrow>
                 <div className="mt-2 flex items-center gap-2.5" style={{ font: `600 17px/1.2 ${SANS}`, color: STATE_TEXT[roomState] }}>
                   <Dot color={stateColor(roomState, room.dept)} size={11} />
@@ -581,6 +621,8 @@ export default function House3D({
                 </section>
               )}
 
+              {!collapsed && (
+                <>
               <section className="mt-7">
                 <Eyebrow>Work made here</Eyebrow>
                 {roomSim.outputs.length === 0 && (
@@ -693,6 +735,8 @@ export default function House3D({
                   ))}
                 </ol>
               </section>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2 border-t p-3" style={{ borderColor: C.panel }}>
               <button type="button" onClick={() => go({ place: "floor", floor: room.floorIndex, room: null })} style={{ ...btnGhost, minHeight: 44 }}>
@@ -704,7 +748,7 @@ export default function House3D({
                   if (!next || floorRooms.length < 2) return null;
                   return (
                     <button key={d} type="button" onClick={() => goRoom(next.id)} style={{ ...btnGhost, minHeight: 44, padding: "0 14px" }}>
-                      {d < 0 ? "Previous room" : "Next room"}
+                      {d < 0 ? (lowPower ? "Previous" : "Previous room") : lowPower ? "Next" : "Next room"}
                     </button>
                   );
                 })}
@@ -769,51 +813,71 @@ export default function House3D({
             exit={reduced ? { opacity: 0 } : { x: 40, opacity: 0 }}
             transition={{ duration: 0.22, ease: [0.2, 0.7, 0.1, 1] }}
             style={{ ...card }}
-            className="absolute inset-x-3 bottom-3 z-30 flex max-h-[58%] flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[440px]"
+            className={`absolute inset-x-3 bottom-3 z-30 flex flex-col overflow-hidden md:inset-x-auto md:bottom-5 md:right-5 md:top-[84px] md:max-h-none md:w-[440px] ${collapsed ? "max-h-[44%]" : "max-h-[80%]"}`}
           >
-            <div className="p-6 pb-3">
+            <SheetHandle open={sheet} onToggle={() => setSheet((v) => !v)} label="Show the conversation" />
+            <div className="px-5 pb-2 pt-1 md:p-6 md:pb-3">
               <Eyebrow>Oval Office</Eyebrow>
               <div className="mt-1">
-                <Headline size={38}>Chief of Staff</Headline>
+                <Headline size={lowPower ? 26 : 38}>Chief of Staff</Headline>
               </div>
             </div>
-            <div data-lenis-prevent className="flex flex-1 flex-col gap-3 overflow-y-auto px-6 pb-4">
-              {chat.map((m) =>
-                m.from === "you" ? (
-                  <div key={m.id} className="self-end rounded-2xl px-4 py-2.5" style={{ background: C.ink, color: C.surface, font: `500 14.5px/1.45 ${SANS}`, maxWidth: "85%" }}>
-                    {m.text}
-                  </div>
-                ) : (
-                  <motion.div key={m.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} className="self-start">
-                    <p style={{ font: `300 21px/1.3 ${SERIF}`, letterSpacing: "-0.015em" }}>{m.text}</p>
-                    {m.rooms.length > 0 && (
-                      <div className="mt-2.5 flex flex-wrap gap-2">
-                        {m.rooms.map((id) => {
-                          const r = ROOM_BY_ID[id];
-                          if (!r) return null;
-                          return (
-                            <button key={id} type="button" onClick={() => goRoom(id)} className="flex items-center gap-2" style={{ ...btnGhost, minHeight: 40, padding: "0 14px", fontSize: 13 }}>
-                              <Dot color={stateColor(stateOf(id), r.dept)} />
-                              Go to {fname(r.floorId)} {DEPTS[r.dept].name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </motion.div>
-                ),
-              )}
-            </div>
-            <div className="border-t p-4" style={{ borderColor: C.panel }}>
-              <div className="flex flex-wrap gap-1.5">
+            {collapsed ? (
+              <div className="px-5 pb-3">
+                {(() => {
+                  const last = chat.filter((m) => m.from === "chief").slice(-1)[0];
+                  return last ? (
+                    <button type="button" onClick={() => setSheet(true)} className="block w-full text-left">
+                      <span style={{ font: `600 10.5px/1.4 ${SANS}`, letterSpacing: "0.16em", textTransform: "uppercase", color: "#7a6a62" }}>As of {last.time}</span>
+                      <span className="mt-1 line-clamp-3" style={{ font: `300 18px/1.3 ${SERIF}`, letterSpacing: "-0.015em" }}>
+                        {last.text}
+                      </span>
+                    </button>
+                  ) : null;
+                })()}
+              </div>
+            ) : (
+              <div ref={chatBox} data-lenis-prevent className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 pb-4 md:px-6">
+                {chat.map((m) =>
+                  m.from === "you" ? (
+                    <div key={m.id} className="self-end rounded-2xl px-4 py-2.5" style={{ background: C.ink, color: C.surface, font: `500 15px/1.45 ${SANS}`, maxWidth: "85%" }}>
+                      {m.text}
+                    </div>
+                  ) : (
+                    <motion.div key={m.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} className="self-start">
+                      <div style={{ font: `600 10.5px/1.4 ${SANS}`, letterSpacing: "0.16em", textTransform: "uppercase", color: "#7a6a62" }}>As of {m.time}</div>
+                      <p className="mt-1" style={{ font: `300 ${lowPower ? 18 : 21}px/1.3 ${SERIF}`, letterSpacing: "-0.015em" }}>
+                        {m.text}
+                      </p>
+                      {m.rooms.length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap gap-2">
+                          {m.rooms.map((id) => {
+                            const r = ROOM_BY_ID[id];
+                            if (!r) return null;
+                            return (
+                              <button key={id} type="button" onClick={() => goRoom(id)} className="flex items-center gap-2" style={{ ...btnGhost, minHeight: 40, padding: "0 14px", fontSize: 13 }}>
+                                <Dot color={stateColor(stateOf(id), r.dept)} />
+                                Go to {fname(r.floorId)} {DEPTS[r.dept].name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </motion.div>
+                  ),
+                )}
+              </div>
+            )}
+            <div className="border-t p-3 md:p-4" style={{ borderColor: C.panel }}>
+              <div className="flex gap-1.5 overflow-x-auto pb-1 md:flex-wrap md:overflow-visible md:pb-0" style={{ scrollbarWidth: "none" }}>
                 {["What needs me?", "What failed?", "What has been finished?", demo ? "How is the software company doing?" : "How is Mastore doing?"].map((q) => (
-                  <button key={q} type="button" onClick={() => ask(q)} style={{ ...btnGhost, minHeight: 36, padding: "0 12px", fontSize: 12.5 }}>
+                  <button key={q} type="button" onClick={() => ask(q)} className="flex-none whitespace-nowrap" style={{ ...btnGhost, minHeight: 40, padding: "0 14px", fontSize: 13 }}>
                     {q}
                   </button>
                 ))}
               </div>
               <form
-                className="mt-3 flex gap-2"
+                className="mt-2 flex gap-2 md:mt-3"
                 onSubmit={(e) => {
                   e.preventDefault();
                   ask(draft);
@@ -822,19 +886,21 @@ export default function House3D({
                 <label htmlFor="ask-chief" className="sr-only">
                   Ask the Chief of Staff
                 </label>
+                {/* 16px: anything smaller makes iPhones zoom the page when the box is tapped */}
                 <input
                   id="ask-chief"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  placeholder="Ask about a floor, a department, or what needs you"
+                  placeholder={lowPower ? "Ask the Chief of Staff" : "Ask about a floor, a department, or what needs you"}
+                  enterKeyHint="send"
                   className="min-h-12 min-w-0 flex-1 rounded-full px-4"
-                  style={{ background: C.cream, color: C.ink, font: `400 14.5px/1 ${SANS}`, border: `1.5px solid ${C.blush}` }}
+                  style={{ background: C.cream, color: C.ink, font: `400 16px/1 ${SANS}`, border: `1.5px solid ${C.blush}` }}
                 />
                 <button type="submit" style={btnPrimary}>
                   Ask
                 </button>
               </form>
-              <p className="mt-2.5" style={{ font: `400 11.5px/1.45 ${SANS}`, color: "#7a6a62" }}>
+              <p className={lowPower ? "hidden" : "mt-2.5"} style={{ font: `400 11.5px/1.45 ${SANS}`, color: "#7a6a62" }}>
                 {isLive
                   ? "The Chief of Staff agent is not built yet. For now these answers are simple rules over the live state."
                   : "Prototype: these answers are worked out from the simulation by simple rules. The real Chief of Staff answers from the log."}

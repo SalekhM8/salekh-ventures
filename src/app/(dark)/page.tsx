@@ -5,7 +5,7 @@ const SITE = "https://salekhventures.com";
 export const metadata = {
   title: { absolute: "AI departments that run your business | Salekh Ventures" },
   description:
-    "Salekh Ventures builds and trains a team of AI agents for your business, one per department. They do the day to day. You set the targets, approve the big calls and score the work. Ten clients.",
+    "Salekh Ventures builds and trains a team of AI agents for your business, one per department. They do the day to day. You set the targets, approve the big calls and score the work.",
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",

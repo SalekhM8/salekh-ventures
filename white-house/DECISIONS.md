@@ -418,3 +418,10 @@ At Salekh's request, after seeing the first live version:
 Salekh mentioned "55 possible agents". No such list has been agreed in this build: there are seven department types. The form offers those seven until he supplies a longer list.
 
 Checked by driving a separate headless Chrome at desktop and phone sizes: the page, the whole form (the test lead arrived with every answer) and the phone walk through the house.
+
+### S4. Phone fixes after Salekh used the live page on his iPhone. Decided, 15 Nov 2026
+
+- The closing section ("Ten clients. No more." and its paragraph) was removed: Salekh found it bizarre and unprofessional. The page no longer mentions a client limit. It closes with "See what your team would look like."
+- In the house on a phone: labels on the building are larger; floor name tags that ran off the edge are hidden (Places covers them); the bottom sheets for a room and for the Chief of Staff start folded down so the scene stays visible, and open with a tab; a floor shows about two rooms and is swiped sideways.
+- Chief of Staff chat: the box uses 16px type so iPhones do not zoom the page when it is tapped; the page behind is pinned and the house follows the keyboard; asking a question opens the conversation and keeps the newest answer in view; each answer is stamped with its time, because the simulation keeps moving and two answers a few seconds apart can differ; the suggested questions sit on one row.
+- The Chief of Staff on the public demo is still simple rules over the simulation, not a model. It now answers a few more kinds of question (what this is, price, whether it is real, what has happened) and says what it can answer when it does not recognise one.

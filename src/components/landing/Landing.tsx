@@ -125,17 +125,17 @@ export function Landing() {
 
       {/* close */}
       <section className="border-t border-black/10 px-6 pb-36 pt-24 md:px-10 md:py-36">
-        <div className="text-xs uppercase tracking-[0.2em] text-muted">(04) Working together</div>
+        <div className="text-xs uppercase tracking-[0.2em] text-muted">(04) Start here</div>
         <h2 className="mt-6 max-w-5xl font-display text-5xl font-semibold leading-[0.98] tracking-[-0.03em] md:text-8xl">
-          Ten clients. No more.
+          See what your team would look like.
         </h2>
         <p className="mt-8 max-w-2xl text-lg leading-relaxed text-muted-2">
-          I am building this on my own businesses first, so every department is proven before it runs yours. I set
-          yours up by hand: your facts, your voice, your targets, your standards. That is why the number is small.
+          Answer a few questions about your business. I will come back to you personally with the departments I would set
+          up first and what they would take off your plate.
         </p>
         <div className="mt-10 flex flex-wrap items-center gap-5">
           <TeamButton size="lg">Build your team</TeamButton>
-          <Link href="/work" className="text-sm underline underline-offset-4" data-hover>
+          <Link href="/work" className="inline-flex min-h-12 items-center text-sm underline underline-offset-4" data-hover>
             Looking for development work instead? See past builds
           </Link>
         </div>
