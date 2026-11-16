@@ -38,8 +38,43 @@ const PATIENT = /\b(i am|i'm|as) (a |an |one of your )?(current |existing |regis
 const ADDRESS = /\b[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}\b|\b(i|we) live (at|on|in)\b|\bmy (home )?address\b|\b\d{1,4} [A-Z][a-z]+ (Road|Street|Avenue|Lane|Close|Drive|Way)\b/;
 const LINK = /https?:\/\/|www\.|\b[a-z0-9-]+\.(com|co\.uk|org|net|io)\b/i;
 
-/** What is wrong with a drafted enquiry, in fixed words. Empty: it may be proposed. */
-export function lintEnquiry(draft: EnquiryDraft, settings: OutreachSettings): string[] {
+const VAGUE = /\b(your|the|their|our) (\w+ ){0,2}services\b|\blegal (work|services|matters)\b|\bcomprehensive care\b|\bgeneral (enquiry|pricing|prices|care)\b|\bprice list\b|\ball (your|the) (treatments|services)\b/i;
+const TIME_OF_DAY = /\bgood (morning|afternoon|evening|day)\b/i;
+
+/** The named services of a kind of business, with the default one for a kind where the trade itself is enough. */
+function namedServices(settings: OutreachSettings): { name: string; terms: string[] }[] {
+  const type = settings.type;
+  // The default's own words stand for it: "a new patient consultation" is named by "consultation".
+  const words = type.default_service.toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 6);
+  return [...type.target_services, { name: type.default_service, terms: words.length > 0 ? words : [type.default_service.toLowerCase()] }];
+}
+
+/**
+ * The one named service to ask a business about, or null when it offers none of the services looked for.
+ * Read from what the analysis found on its own pages, and always given back as the name on the kind's list:
+ * never the business's own wording, which may be a whole price list or a vague phrase.
+ */
+export function serviceFor(analysis: Record<string, unknown> | null | undefined, settings: OutreachSettings): string | null {
+  const type = settings.type;
+  const said = (key: string): string => {
+    const field = analysis?.[key] as { value?: unknown } | string | undefined;
+    return typeof field === "object" && field !== null && typeof field.value === "string" ? field.value.toLowerCase() : "";
+  };
+  // What the analysis named as the target service comes first, then the highest value service, then everything it sells.
+  for (const text of [said("target_service"), said("highest_value_service"), said("what_they_sell")]) {
+    if (!text) continue;
+    const hit = type.target_services.find((service) => service.terms.some((term) => text.includes(term)));
+    if (hit) return hit.name;
+  }
+  return type.require_target_service ? null : type.default_service;
+}
+
+/**
+ * What is wrong with a drafted enquiry, in fixed words. Empty: it may go forward. These checks are the only
+ * gate when enquiries send themselves, so they are made when it is drafted and again in the moment before it is sent.
+ * `service`: the named service it was asked to be about, when that is known.
+ */
+export function lintEnquiry(draft: EnquiryDraft, settings: OutreachSettings, service?: string | null): string[] {
   const problems: string[] = [];
   const subject = typeof draft.subject === "string" ? draft.subject.trim() : "";
   const body = typeof draft.body === "string" ? draft.body.trim() : "";
@@ -55,6 +90,14 @@ export function lintEnquiry(draft: EnquiryDraft, settings: OutreachSettings): st
   if (BOOKS.test(text)) problems.push("it asks to book. An enquiry never books an appointment");
   if (PATIENT.test(text)) problems.push("it claims to be a patient or customer. Nothing false may be said about who is asking");
   if (LINK.test(text)) problems.push("it contains a link or a web address");
+  // It must name one specific service: the one it was given, or failing that one of this kind's named services.
+  const named = namedServices(settings);
+  const wanted = service ? named.filter((n) => n.name === service) : [];
+  const names = (list: { terms: string[] }[]) => list.some((n) => n.terms.some((term) => lower.includes(term)));
+  if (wanted.length > 0 ? !names(wanted) : !names(named)) {
+    problems.push(`it does not name a specific service. Ask about this and nothing else: ${service ?? named[0]?.name ?? settings.type.default_service}`);
+  } else if (VAGUE.test(text)) problems.push("it is vague (it asks about services in general). Ask about the one named service only");
+  if (TIME_OF_DAY.test(text)) problems.push("it greets by the time of day, which may be wrong when it is sent. Use Hello or Hi");
   const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.at(-1) !== settings.enquiry_signoff) problems.push(`it must end with the sign-off "${settings.enquiry_signoff}" on its own line`);
   return problems;
@@ -215,7 +258,8 @@ export function estimateLeak(
 export interface StoredReply {
   message_id: string;
   received_at: string;
-  kind: "person" | "automatic" | "unclear";
+  /** "bounce": a notice that the enquiry could not be delivered. The business never saw it, so it is not a result. */
+  kind: "person" | "automatic" | "unclear" | "bounce";
   matched_by: "header" | "sender";
   /** PERSONAL DATA: the words of the reply. Lives here, on the prospect, and nowhere else. */
   text: string;
@@ -267,4 +311,30 @@ export function openAt(periods: { open: { day: number; minutes: number }; close:
     if (to <= from) to += WEEK;
     return (at >= from && at < to) || (at + WEEK >= from && at + WEEK < to);
   });
+}
+
+// ---- replies that must stop sending ---------------------------------------------------
+
+const COMPLAINT = /\b(spam|unsolicited|junk mail|harass|report(ed|ing)? (you|this)|how did you get (my|our|this)|stop (emailing|contacting|messaging)|gdpr|data protection|information commissioner|\bico\b|legal action|cease and desist|complain(t|ing)?|not interested.{0,40}(again|further)|take (me|us) off|who (are|is) (you|this)\?)/i;
+
+/** Does the reply read as a complaint about being contacted? Wider than a plain request not to be contacted, and it includes one. */
+export function readsAsComplaint(text: string): boolean {
+  return asksNotToBeContacted(text) || COMPLAINT.test(text);
+}
+
+/** Is this a notice that the enquiry could not be delivered? Judged from who sent it and its subject, never from its body. */
+export function isBounce(from: string, subject: string): boolean {
+  return /^(mailer-daemon|postmaster)@/i.test(from.trim()) || /\b(delivery status notification|undeliver(ed|able)|delivery (has )?failed|mail delivery (failed|subsystem)|returned mail|address not found|message not delivered)\b/i.test(subject);
+}
+
+// ---- when an enquiry may be sent ----------------------------------------------------------
+
+/** Is this moment inside the sending hours, on a sending day, and not a day set aside? All in the tenant's own time zone. */
+export function withinSendingHours(when: Date, timezone: string, settings: Pick<OutreachSettings, "enquiry_send_days" | "enquiry_send_from" | "enquiry_send_until" | "enquiry_no_send_dates">): boolean {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(when);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(get("weekday")) + 1;
+  const date = `${get("year")}-${get("month")}-${get("day")}`;
+  const time = `${get("hour")}:${get("minute")}`;
+  return settings.enquiry_send_days.includes(day) && !settings.enquiry_no_send_dates.includes(date) && time >= settings.enquiry_send_from && time < settings.enquiry_send_until;
 }

@@ -60,6 +60,20 @@ export interface Mailbox {
 
 const AUTO_HEADERS = ["auto-submitted", "x-autoreply", "x-autorespond", "x-auto-response-suppress", "precedence"];
 
+/** The mail server refused the login. Nothing was sent or read. Sending stops until someone has looked at the mailbox's password. */
+export class MailboxLoginError extends ControlError {
+  constructor() {
+    super("mailbox_login_failed", "the test mailbox refused the login");
+    this.name = "MailboxLoginError";
+  }
+}
+
+/** A refused login, as nodemailer and imapflow report one. Judged from their error codes, never from the server's words. */
+function isLoginFailure(err: unknown): boolean {
+  const e = err as { code?: unknown; responseCode?: unknown; authenticationFailed?: unknown; serverResponseCode?: unknown } | null;
+  return e?.code === "EAUTH" || e?.responseCode === 535 || e?.responseCode === 534 || e?.authenticationFailed === true || e?.serverResponseCode === "AUTHENTICATIONFAILED";
+}
+
 export function createGmailMailbox(options: { address: string; appPassword: string }): Mailbox {
   if (!options.address || !options.appPassword) throw new Error("test mailbox: address and app password are both needed");
   const auth = { user: options.address, pass: options.appPassword };
@@ -72,6 +86,7 @@ export function createGmailMailbox(options: { address: string; appPassword: stri
       return await work(client);
     } catch (err) {
       if (err instanceof ControlError) throw err;
+      if (isLoginFailure(err)) throw new MailboxLoginError();
       // Never the server's own words: they can quote a mailbox's contents.
       throw new ControlError("mailbox_failed", "the test mailbox could not be read");
     } finally {
@@ -88,7 +103,9 @@ export function createGmailMailbox(options: { address: string; appPassword: stri
       const messageId = `<${randomUUID()}@${domain}>`;
       try {
         await transport.sendMail({ from: options.address, to: mail.to, subject: mail.subject, text: mail.text, messageId });
-      } catch {
+      } catch (err) {
+        // A refused login means the message certainly did not go. Anything else, and it may have.
+        if (isLoginFailure(err)) throw new MailboxLoginError();
         throw new ControlError("mail_send_failed", "the mail server did not accept the message");
       } finally {
         transport.close();

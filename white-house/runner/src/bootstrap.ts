@@ -92,6 +92,40 @@ export interface BootstrapOptions {
    * the settings command from, so this is how a kind is switched on or off there. null or absent: left as they are.
    */
   enabledTypes?: string[] | null;
+  /**
+   * The owner's switch for test enquiries, on a server with no shell: 2 (each needs a yes) or 3 (sent without
+   * asking, inside the limits). Written as a new version of the rung, in the owner's name, only when it differs
+   * from what is in force. Anything but 2 or 3, or anything past the action's ceiling, stops the start.
+   */
+  enquiryRung?: number | null;
+}
+
+export const RUNG_REASON = "set by the owner through the server's settings";
+
+async function setEnquiryRung(client: pg.Client, tenantId: string, rung: number): Promise<number> {
+  const type = actionTypes.get("enquiry.send_email");
+  if (!type) throw new Error("this runner has no enquiry.send_email action");
+  if (rung !== 2 && rung !== 3) throw new Error("WH_ENQUIRY_RUNG must be 2 (each enquiry needs a yes) or 3 (sent without asking)");
+  if (rung > type.maxRung) throw new Error(`WH_ENQUIRY_RUNG is above the ceiling of ${type.maxRung} fixed in code for test enquiries`);
+  const owner = (await client.query("select member_id from members where tenant_id = $1 and role = 'owner' and status = 'active' order by created_at limit 1", [tenantId])).rows[0];
+  if (!owner) throw new Error("the tenant has no active owner to set the rung in the name of");
+  // Every floor that has an Outreach room.
+  const floors = (await client.query("select business_id from businesses where tenant_id = $1 and 'outreach' = any (departments)", [tenantId])).rows;
+  let changed = 0;
+  for (const floor of floors) {
+    const current = (await client.query(
+      "select value, version from config_versions where tenant_id = $1 and business_id = $2 and kind = 'rung' and key = 'enquiry.send_email' order by version desc limit 1",
+      [tenantId, floor.business_id],
+    )).rows[0];
+    if (Number(current?.value?.rung ?? 1) === rung) continue;
+    await client.query(
+      `insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, changed_by_member, reason)
+       values ($1, $2, 'rung', 'enquiry.send_email', $3::jsonb, $4, 'member', $5, $6)`,
+      [tenantId, floor.business_id, JSON.stringify({ rung }), Number(current?.version ?? 0) + 1, owner.member_id, RUNG_REASON],
+    );
+    changed += 1;
+  }
+  return changed;
 }
 
 export interface BootstrapResult {
@@ -102,6 +136,8 @@ export interface BootstrapResult {
   carriedApplied: boolean;
   /** Rooms whose outreach settings were written again: brought to the current shape, or a kind switched on or off. */
   settingsUpdated: number;
+  /** Rooms whose rung for test enquiries was changed by WH_ENQUIRY_RUNG on this start. */
+  rungChanged: number;
 }
 
 /**
@@ -186,7 +222,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       ownerName: options.ownerName, ownerEmail: options.ownerEmail, ...(carried ? { carried } : {}),
     });
     const settingsUpdated = await bringOutreachSettingsUpToDate(client, seeded.tenantId, options.enabledTypes ?? null);
-    return { migrationsApplied, roles, tenantId: seeded.tenantId, firstBoot, carriedApplied: carried !== undefined, settingsUpdated };
+    const rungChanged = options.enquiryRung === undefined || options.enquiryRung === null ? 0 : await setEnquiryRung(client, seeded.tenantId, options.enquiryRung);
+    return { migrationsApplied, roles, tenantId: seeded.tenantId, firstBoot, carriedApplied: carried !== undefined, settingsUpdated, rungChanged };
   } finally {
     await client.end().catch(() => undefined);
   }
@@ -236,12 +273,14 @@ export async function bootstrapFromEnv(env: Env, log: (line: string) => void = c
       tenantId: env.WH_TENANT_ID as string, tenantSlug: env.WH_TENANT_SLUG ?? "salekh", tenantName: env.WH_TENANT_NAME ?? "Salekh",
       ownerName: env.WH_OWNER_NAME, ownerEmail: env.WH_OWNER_EMAIL, carried,
       ...(env.MIGRATIONS_DIR ? { migrationsDir: env.MIGRATIONS_DIR } : {}),
+      ...(env.WH_ENQUIRY_RUNG !== undefined && env.WH_ENQUIRY_RUNG !== "" ? { enquiryRung: /^[0-9]$/.test(env.WH_ENQUIRY_RUNG.trim()) ? Number(env.WH_ENQUIRY_RUNG.trim()) : Number.NaN } : {}),
       ...(env.WH_OUTREACH_ENABLED_TYPES ? { enabledTypes: env.WH_OUTREACH_ENABLED_TYPES.split(",").map((id) => id.trim()).filter(Boolean) } : {}),
       // Only for running two houses on one database server (as the tests do). The server leaves it unset.
       ...(env.WH_DB_ROLE_PREFIX ? { rolePrefix: env.WH_DB_ROLE_PREFIX } : {}),
     });
     log(`bootstrap: ${result.migrationsApplied.length} migrations applied, ${result.roles.length} logins set, tenant ready` +
       `${result.firstBoot ? (result.carriedApplied ? ", first boot: carried configuration applied" : ", first boot: defaults only") : ", not the first boot: configuration left as it is"}` +
+      `${result.rungChanged > 0 ? `, test enquiries set to rung ${env.WH_ENQUIRY_RUNG?.trim()} (${env.WH_ENQUIRY_RUNG?.trim() === "3" ? "sent without asking" : "each needs a yes"})` : ""}` +
       `${result.settingsUpdated > 0 ? `, outreach settings written again for ${result.settingsUpdated} ${result.settingsUpdated === 1 ? "room" : "rooms"}` : ""}`);
     return result;
   } catch (err) {

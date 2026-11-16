@@ -59,7 +59,7 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
     throw new Error("WH_API_TOKEN is not set. The API routes are not started without it.");
   }
 
-  async function api(req: IncomingMessage, res: ServerResponse, method: string, parts: string[], rt: Runtime): Promise<void> {
+  async function api(req: IncomingMessage, res: ServerResponse, method: string, parts: string[], rt: Runtime, query: URLSearchParams): Promise<void> {
     const body = method === "POST" ? await readJson(req).catch(() => undefined) : {};
     if (body === undefined) return send(res, 400, { reason: "invalid_json" });
     const [a, b, c] = parts.map((p) => decodeURIComponent(p));
@@ -76,6 +76,10 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
       case "POST outputs/:id/score": {
         const r = await rt.scoreOutput(b as string, body);
         return r.status === 200 ? send(res, 200, { ok: true }) : fail(r);
+      }
+      case "GET rooms/:id/enquiries": {
+        const r = await rt.listSent(b as string, query.get("since"));
+        return r.status === 200 ? send(res, 200, { enquiries: r.enquiries }) : fail(r);
       }
       case "GET rooms/:id/approvals": {
         const r = await rt.listApprovals(b as string);
@@ -133,8 +137,11 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
 
   return createServer((req, res) => {
     let pathname: string;
+    let query: URLSearchParams;
     try {
-      pathname = new URL(req.url ?? "/", "http://runner").pathname;
+      const url = new URL(req.url ?? "/", "http://runner");
+      pathname = url.pathname;
+      query = url.searchParams;
     } catch {
       return send(res, 404, { error: "not_found" });
     }
@@ -153,7 +160,7 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
       return send(res, 401, { error: "unauthorised" });
     }
     const routeName = `${method} /v1/${parts[1] ?? ""}`.slice(0, 40).replace(/[^A-Za-z0-9/ _-]/g, "");
-    api(req, res, method, parts.slice(1), runtime).catch((err: unknown) => {
+    api(req, res, method, parts.slice(1), runtime, query).catch((err: unknown) => {
       // Nothing the caller sent is written to the log: not the path beyond its first word, not the body, not an error's own text.
       console.error(`${routeName} failed: ${err instanceof Error ? err.name : "error"}`);
       if (!res.headersSent) send(res, 500, { error: "internal_error" });

@@ -5,7 +5,7 @@ import { ControlError } from "../control/errors.js";
 import { tenantDay } from "../control/runs.js";
 import { companyNumberKey, domainKey, hostKey, nameKey, namePostcodeHash, namesNearlyMatch, postcodeKey } from "./normalise.js";
 import type { Place } from "../control/connectors/places.js";
-import { captureFor, sayMinutes, type TestResult } from "./enquiry-rules.js";
+import { captureFor, sayMinutes, serviceFor, type TestResult } from "./enquiry-rules.js";
 import { applyFilters, isGroup, scoreProspect, type Analysis, type Draft, type Scorable } from "./score.js";
 import { FIRST_TYPE_ID, forType } from "./settings.js";
 import { SIGNALS, type OutreachSettings } from "./settings.js";
@@ -233,6 +233,7 @@ export const analysisShape = {
   legal_form: z.union([NOT_FOUND, z.object({ value: z.enum(["limited_company", "sole_trader", "partnership", "other"]), source_url: httpUrl })]).describe('What the business says it is, or "not found".'),
   postcode: fact.describe('The postcode of its premises, or "not found".'),
   group: fact.optional().describe('The corporate group or chain it is part of, if a page says so, or "not found".'),
+  target_service: fact.optional().describe('Which of the kind\'s target services the pages show the business offers, or "not found".'),
   highest_value_price: z.union([NOT_FOUND, z.object({ amount: z.number().positive().max(1_000_000), source_url: httpUrl })]).optional()
     .describe('The price in pounds the business publishes for its highest value service, or "not found".'),
   opening_hours: fact.optional().describe('Opening hours as the business publishes them, or "not found".'),
@@ -559,6 +560,9 @@ export async function triageAnalysed(
       await tx.query("update prospects set score = $2, score_breakdown = $3::jsonb where prospect_id = $1", [p.prospectId, score, JSON.stringify(breakdown)]);
       const scored = { ...p, score, breakdown: { ...breakdown } };
       const why = (raw.not_testable_reason as string | null) ?? notTestable(p, scorable);
+      // The right trade is not enough for a kind that is looked for by its services: a solicitor that does neither
+      // conveyancing nor family law is not what is being looked for, and is not written to.
+      if (own.type.require_target_service && serviceFor(p.analysis, own) === null) { await out("not_a_target_service"); continue; }
       if (why === null) { toTest.push(scored); continue; }
       await tx.query("update prospects set not_testable_reason = $2 where prospect_id = $1", [p.prospectId, why]);
       scored.notTestableReason = why;

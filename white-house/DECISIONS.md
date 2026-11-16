@@ -792,3 +792,40 @@ Without a test mailbox the old order and the old filters still apply, a named pe
 
 Each enquiry is given one of six shapes (greeting, which question comes first, how it closes), picked by a number worked out from the business's id, so a batch is spread across them and the same business always gets the same one. The service asked about is cut to the first item of whatever the price list said ("implants, veneers, Invisalign and whitening" becomes "implants") before the model sees it. The prompt was rewritten for any kind of business. Every check still applies, with one added for every kind: no address or postcode.
 
+## Test enquiries that send themselves (rung 3), 17 Nov 2026
+
+Salekh's decision as owner: test enquiries send without his yes; his task is to call the shortlisted businesses. Rung 3 was already the ceiling for `enquiry.send_email`. What follows is what makes that safe.
+
+### S1. The switch is the owner's
+
+`WH_ENQUIRY_RUNG` (2 or 3) on the server, applied at start as a new version of the rung in the owner's name, reason "set by the owner through the server's settings"; anything else stops the start. Locally `npm run outreach-settings -- --enquiry-rung 3`, never past the ceiling in code. The settings output says "EACH NEEDS YOUR YES" or "SENT WITHOUT ASKING, inside the limits below".
+
+### S2. Nothing is approved on anyone's behalf
+
+At rung 3 an enquiry is never given an approval at all. It is recorded as `queued` (a new status), and a single sender puts it to the gateway when its turn comes; the gateway logs it as executed at rung 3. Enquiries that were waiting for a yes when the rung rose are withdrawn: the approval becomes `voided` with reason `rung_changed`, nobody is named as having decided, and the enquiry is queued afresh only if it passes today's checks (otherwise it is closed unsent and the business can be drafted for again). One event each. This runs at the start of every run and on every ten minute round, which includes the one at boot.
+
+### S3. The checks are the gate, so they are tighter and are made twice
+
+Made when drafted, and again in the moment before sending:
+
+- **One named service.** Each kind has a list of target services by name, with the words that show a business offers one. The enquiry asks about exactly one of them, by the list's own name, never the business's wording. A draft that does not name it, or that asks about "services" in general, is refused. A clinic with no listed treatment in view is asked about "a new patient consultation".
+- **The right services, not just the right trade.** For solicitors, financial advisers, accountants and trades a business must be seen to offer a target service or it is set aside as `not_a_target_service` and never written to (a solicitor doing only immigration work, a plumber on call-outs). The analysis is asked which target service the pages show; code confirms it against the list. The Places search phrases were already specific to the service; the looseness was in what counted as a match.
+- **No greeting by the time of day**, in the shapes or in a draft.
+- **Sending hours.** Working days, 09:00 to 17:30 in the tenant's time zone (settings). Outside them an enquiry waits. `enquiry_no_send_dates` is a list of dates to skip, **seeded empty: the build does not know England's bank holidays and does not invent them.**
+- Unchanged: one per business ever, the daily cap, the gap, suppression, the kill switch, no health, case, money or property details, no booking, no address, no links, signed.
+
+### S4. Circuit breakers
+
+Sending stops for the rest of the tenant's day, with one event and a line that opens the shortlist, when: more than three sends fail or bounce in a day; any reply reads as a complaint about being contacted (the opt-out detection, widened; that business is also suppressed); or the mailbox refuses the login. A refused login means the message certainly did not go, so that enquiry is put back in the queue and not marked failed. A bounce is not a reply and not a result: the business is not judged on its silence (`enquiry_bounced`), and the bounce's text is not kept. Stopping applies to approved enquiries as well as queued ones.
+
+### S5. Reading it afterwards
+
+Each shortlist opens with how many were sent without asking since the last was written, by kind (no names). Which enquiries a shortlist has told of is kept on it by id, so none is told of twice or missed. `GET /v1/rooms/:roomId/enquiries?since=` returns who was written to, the full text, when, the status and whether it went without an approval. That is personal data, like the approvals list, and nothing of it is in `/v1/house`.
+
+### Could not do, or worth knowing
+
+- Bank holidays are not known (S3).
+- At rung 2, a yes given more than 24 hours before the next sending hours open (Friday evening for Monday) expires unsent, because an approval lasts 24 hours. At rung 3 nothing expires in the queue.
+- Sending runs behind a run, so a shortlist is written before that run's enquiries have gone: they are told of on the next one, and a breaker tripped by them opens the next one.
+- The complaint detection is a list of phrases plus the reply reader's own judgement. A complaint worded unlike any of them would not trip it.
+

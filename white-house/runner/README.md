@@ -162,6 +162,10 @@ Without both mailbox variables no enquiry is drafted, sent or read, and the shor
 
 A business's own pages are read directly by the runner (`src/control/connectors/direct-read.ts`): public addresses only, robots.txt obeyed, bot checks left alone. Agent Reach `web read` is the fallback for pages that give almost no text. `DIRECT_READ=off` goes back to Agent Reach alone.
 
+## Test enquiries that send themselves
+
+`npm run outreach-settings -- --enquiry-rung 3` (the owner's switch; `2` goes back to "each needs your yes"). At rung 3 a test enquiry is queued, checked again in the moment before it goes, and sent only on working days between 09:00 and 17:30, 90 seconds apart, inside the daily cap. Sending stops for the day after more than three failed sends or bounces, any reply that reads as a complaint, or a refused mailbox login. Bank holidays are not known to the system: add them to `enquiry_no_send_dates`. See `DEPLOY.md` for the server.
+
 ## Kinds of business
 
 The Outreach room looks for several kinds of business (`business_types` in its settings): clinics, solicitors, financial advisers and mortgage brokers, estate and letting agents, accountants, and home improvement trades. Each has its own search phrases, groups, enquiry guidance, forbidden topics and leak assumptions (all placeholders until edited). Online shops are left out on purpose.

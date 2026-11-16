@@ -14,12 +14,13 @@ import type { CompaniesHouseConnector } from "./control/connectors/companies-hou
 import type { TrafficConnector } from "./control/connectors/posthog.js";
 import type { ModelCaller } from "./agents/model-caller.js";
 import { runOutreach } from "./outreach/pipeline.js";
-import { parseOutreachSettings, type OutreachSettings } from "./outreach/settings.js";
+import { forType, parseOutreachSettings, type OutreachSettings } from "./outreach/settings.js";
 import { countWaiting } from "./outreach/store.js";
 import type { Mailbox } from "./control/connectors/mailbox.js";
 import type { PlacesConnector } from "./control/connectors/places.js";
 import type { DirectReader } from "./control/connectors/direct-read.js";
-import { collectReplies, createMailConnector, ENQUIRY_ACTION, syncDecisions, type ReplyCounts } from "./outreach/enquiries.js";
+import { breakerToday, checkFailures, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
+import { lintEnquiry, withinSendingHours } from "./outreach/enquiry-rules.js";
 import { replyPrompt } from "./outreach/pipeline.js";
 import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
@@ -117,6 +118,10 @@ export interface Runtime {
   decideBatch(body: unknown): Promise<Answer<{ results: { id: string; status: string; reason?: string }[] }>>;
   /** Search the test mailbox for replies to the enquiries this system sent. Plain code. */
   collectReplies(): Promise<ReplyCounts | null>;
+  /** What was sent from one room since a moment (default: the last seven days). This returns personal data on purpose: it is the record of what went out. */
+  listSent(roomId: string, since: string | null): Promise<Answer<{ enquiries: SentEnquiry[] }>>;
+  /** Start sending whatever is due, if it is not already going. Returns at once. */
+  sendDue(): void;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -166,7 +171,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     db: gatewayDb,
     actionTypes,
     // The dummy action's connector is a Map in memory. The mail connector is the only thing that holds the test mailbox.
-    connectors: { ...(options.connectors ?? { dummy: createDummyConnector() }), mail: createMailConnector({ db: gatewayDb, mailbox: mailbox, now: clock }) },
+    connectors: { ...(options.connectors ?? { dummy: createDummyConnector() }), mail: createMailConnector({ db: gatewayDb, mailbox: mailbox, now: clock, onLoginFailure: (_tenant, businessId) => tripBreaker(gatewayDb, tenantId, businessId, "mailbox_login", clock()) }) },
     now: clock,
   });
   const inFlight = new Map<string, Promise<void>>();
@@ -518,26 +523,80 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const WAITS = new Set(["kill_switch", "cap_exceeded", "cap_not_configured", "budget_exceeded", "budget_not_configured", "floor_inactive", "rung_too_low"]);
 
   /** Send approved enquiries one at a time, oldest yes first, with a gap between them. Stops at the kill switch or the day's allowance. */
+  const settingsOf = async (businessId: string): Promise<OutreachSettings> => {
+    const stored = await gatewayDb.tx(tenantId, (tx) => readCurrent(tx, { businessId, kind: "setting", key: "outreach" }));
+    try {
+      return parseOutreachSettings(stored?.value ?? {});
+    } catch {
+      return parseOutreachSettings({}); // settings that do not parse stop a run elsewhere; here the defaults are the cautious choice
+    }
+  };
+  /** Enquiries that were waiting for a yes when their action moved to rung 3: withdrawn, never approved, and queued afresh if they still pass. */
+  const requeue = () => requeueAfterRungChange(gatewayDb, tenantId, settingsOf, clock());
+
+  /**
+   * Send what is due, one at a time, oldest first, with a gap between them: enquiries a person approved (rung 2),
+   * and enquiries queued to go without asking (rung 3). It stops, and leaves the rest for the next round, at the
+   * kill switch, the day's allowance, the budget, the end of the sending hours, or a tripped breaker.
+   */
   async function sendApproved(): Promise<void> {
     for (;;) {
       await syncDecisions(gatewayDb, tenantId, clock());
+      await requeue();
+      if (await breakerToday(gatewayDb, tenantId, clock())) return;
       const next = await gatewayDb.tx(tenantId, async (tx) =>
-        (await tx.query("select enquiry_id, approval_id, business_id from enquiries where status = 'approved' and approval_id is not null order by decided_at, enquiry_id limit 1")).rows[0]);
+        (await tx.query(
+          `select e.enquiry_id, e.approval_id, e.business_id, e.prospect_id, e.status, e.to_address, e.subject, e.body, e.service, p.business_type, t.timezone
+             from enquiries e join prospects p on p.prospect_id = e.prospect_id join tenants t on t.tenant_id = e.tenant_id
+            where (e.status = 'approved' and e.approval_id is not null) or e.status = 'queued'
+            order by coalesce(e.decided_at, e.proposed_at), e.enquiry_id limit 1`,
+        )).rows[0]);
       if (!next) return;
-      const done = await gateway.executeApproval({ tenantId, approvalId: next.approval_id });
-      changed();
-      if (done.outcome === "refused" && WAITS.has(done.reason)) return;
-      const still = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select status from enquiries where enquiry_id = $1", [next.enquiry_id])).rows[0]?.status);
-      if (still === "approved") {
-        // It was not sent and will not be: the approval is void, used or gone. Without the mailbox, nothing can be sent at all.
-        if (done.outcome === "execution_failed") return;
-        await gatewayDb.tx(tenantId, (tx) => tx.query("update enquiries set status = $2 where enquiry_id = $1 and status = 'approved'", [next.enquiry_id, done.outcome === "refused" && done.reason === "expired" ? "expired" : "rejected"]));
-        continue;
+      const settings = await settingsOf(next.business_id);
+      // Nothing goes out at night, at the weekend or on a day set aside. It waits for the hours to open.
+      if (!withinSendingHours(clock(), next.timezone as string, settings)) return;
+      const statusNow = () => gatewayDb.tx(tenantId, async (tx) => (await tx.query("select status from enquiries where enquiry_id = $1", [next.enquiry_id])).rows[0]?.status as string | undefined);
+      const close = (status: "expired" | "rejected", from: string) =>
+        gatewayDb.tx(tenantId, (tx) => tx.query("update enquiries set status = $2 where enquiry_id = $1 and status = $3", [next.enquiry_id, status, from]));
+
+      if (next.status === "approved") {
+        const done = await gateway.executeApproval({ tenantId, approvalId: next.approval_id });
+        changed();
+        if (done.outcome === "refused" && WAITS.has(done.reason)) return;
+        if ((await statusNow()) === "approved") {
+          // It was not sent and will not be: the approval is void, used or gone. Without the mailbox, nothing can be sent at all.
+          if (done.outcome === "execution_failed") return;
+          await close(done.outcome === "refused" && done.reason === "expired" ? "expired" : "rejected", "approved");
+          continue;
+        }
+      } else {
+        // Nobody is asked, so the checks are the only gate: they are made again here, in the moment before it goes.
+        const own = forType(settings, next.business_type as string);
+        if (lintEnquiry({ subject: next.subject, body: next.body }, own, next.service as string | null).length > 0) {
+          await close("expired", "queued");
+          await gatewayDb.tx(tenantId, (tx) => emitEvent(tx, { tenantId, businessId: next.business_id, department: "outreach", type: "stage", reasonCode: "enquiry_failed_checks", summary: "An enquiry queued to send no longer passed the checks and was not sent", now: clock() }));
+          continue;
+        }
+        const done = await gateway.submit({
+          tenantId, businessId: next.business_id, department: "outreach", actionType: ENQUIRY_ACTION,
+          // One key per attempt. What stops a second send is the enquiry's own row, claimed before sending, and the one-per-business rule in the database.
+          actionKey: `enquiry:${next.enquiry_id}:auto:${clock().getTime()}`,
+          payload: { enquiry_id: next.enquiry_id, prospect_id: next.prospect_id, to: next.to_address, subject: next.subject, body: next.body },
+          reason: "Test enquiry by email",
+        });
+        changed();
+        if (done.outcome === "refused" && WAITS.has(done.reason)) return;
+        if (done.outcome === "waiting_approval") {
+          // The rung has gone back to 2 since it was queued: it now waits for a yes like any other.
+          await gatewayDb.tx(tenantId, (tx) => tx.query("update enquiries set status = 'proposed', approval_id = $2 where enquiry_id = $1 and status = 'queued'", [next.enquiry_id, done.approvalId]));
+          continue;
+        }
+        if (done.outcome === "recommended" || done.outcome === "refused") { await close("expired", "queued"); continue; }
+        // Still queued after an attempt: the mailbox refused the login, so nothing went and sending has been stopped for the day.
+        if ((await statusNow()) === "queued") return;
       }
-      const stored = await gatewayDb.tx(tenantId, (tx) => readCurrent(tx, { businessId: next.business_id, kind: "setting", key: "outreach" }));
-      let gap = 90;
-      try { gap = parseOutreachSettings(stored?.value ?? {}).enquiry_send_gap_seconds; } catch { /* the default stands */ }
-      if (gap > 0) await pause(gap * 1000);
+      if (await checkFailures(gatewayDb, tenantId, next.business_id, settings.enquiry_max_failures_a_day, clock())) return;
+      if (settings.enquiry_send_gap_seconds > 0) await pause(settings.enquiry_send_gap_seconds * 1000);
     }
   }
   function kickSender(): void {
@@ -556,10 +615,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       db: gatewayDb, tenantId, mailbox, model: options.model ?? null, apiKey: options.apiKeyFor((tenant?.slug as string | null) ?? "") ?? null,
       system, usdToGbp: options.usdToGbp, now: clock,
     });
-    // The same round also sends anything approved that was held over (yesterday's allowance, a kill switch since lifted).
+    // The same round also sends anything due that was held over (the sending hours, yesterday's allowance, a kill switch since lifted).
     kickSender();
     changed();
     return counts;
+  };
+
+  const listSent: Runtime["listSent"] = async (roomId, since) => {
+    const from = since === null ? new Date(clock().getTime() - 7 * 24 * 60 * 60 * 1000) : new Date(since);
+    if (Number.isNaN(from.getTime())) return { status: 422, reason: "since must be a date and time, for example 2026-11-17T08:00:00Z" };
+    const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
+    if (!room) return { status: 404 };
+    return { status: 200, enquiries: await listEnquiries(gatewayDb, tenantId, room.businessId, from) };
   };
 
   const setKillSwitch: Runtime["setKillSwitch"] = async (body) => {
@@ -812,7 +879,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       tenantId, businessId: room.businessId, businessSlug: room.business, gatewayDb, agentDb, clock, apiKey, settings,
       model: options.model, reach: options.reach ?? null, companiesHouse: options.companiesHouse ?? null,
       whRoot: options.whRoot, usdToGbp: options.usdToGbp, firstRunId: started.runId, firstStage, changed,
-      mailbox, gateway, places: options.places ?? null, directReader: options.directReader ?? null,
+      mailbox, gateway, afterEnquiries: kickSender, places: options.places ?? null, directReader: options.directReader ?? null,
       ...(options.sleep ? { sleep: options.sleep } : {}),
     })
       .catch((err) => console.error(`outreach run ${started.runId} stopped unexpectedly: ${err instanceof Error ? err.name : "error"}`))
@@ -825,5 +892,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, sendDue: kickSender };
 }

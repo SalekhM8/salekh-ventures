@@ -12,6 +12,7 @@ import { changeOutreachSettings, readOutreachSettings, suppress, type SettingsCh
  * npm run outreach-settings -- --exclude-group "Name" --type solicitors      groups are per kind; without --type, clinics
  * npm run outreach-settings -- --enquiries-per-day 30         the day's allowance of test enquiries
  * npm run outreach-settings -- --allow-enquiries yes          rung 1 to rung 2: each enquiry then needs approval
+ * npm run outreach-settings -- --enquiry-rung 3               the owner's switch: 2 each needs a yes, 3 sent without asking. Never past the action's ceiling
  * npm run outreach-settings -- --room mastore:outreach ...    default salekh-ventures:outreach
  *
  * Connects with the UI's role only: DATABASE_URL_UI and WH_TENANT_ID, from the
@@ -53,6 +54,7 @@ try {
       else if (flag === "--disable-type") (change.disableTypes ??= []).push(value);
       else if (flag === "--type") change.typeId = value;
       else if (flag === "--allow-enquiries") change.allowEnquiries = value === "yes";
+      else if (flag === "--enquiry-rung") change.enquiryRung = Number(value);
       else throw new Error(`unknown option ${flag}`);
     }
     const now = Object.keys(change).length ? await changeOutreachSettings(db, tenantId, room, change) : await readOutreachSettings(db, tenantId, room);
@@ -76,7 +78,10 @@ try {
     for (const t of s.business_types.filter((x) => x.excluded_groups.length > 0)) console.log(`  excluded groups (${t.id}): ${t.excluded_groups.join(", ")}`);
     console.log(`  runs daily at:    ${now.dailyAt ?? "not scheduled"}`);
     console.log(`  test enquiries:   ${s.test_enquiries ? "on" : "off"}, signed "${s.enquiry_signoff}", ${now.enquiriesPerDay ?? "no allowance set (none can be sent)"} a day, ${s.enquiry_send_gap_seconds} seconds apart`);
-    console.log(`  enquiry rung:     ${now.enquiryRung} (${now.enquiryRung === 1 ? "stored only: nothing is sent" : now.enquiryRung === 2 ? "each needs your yes" : "sent, and you are told"})`);
+    console.log(`  enquiry rung:     ${now.enquiryRung}: ${now.enquiryRung === 1 ? "stored only: nothing is sent" : now.enquiryRung === 2 ? "EACH NEEDS YOUR YES" : "SENT WITHOUT ASKING, inside the limits below"}`);
+    console.log(`  limits:           ${now.enquiriesPerDay ?? "no allowance set (none can be sent)"} a day, ${s.enquiry_send_gap_seconds} seconds apart, one per business ever, only ${s.enquiry_send_from} to ${s.enquiry_send_until} on days ${s.enquiry_send_days.join(",")} (1 is Monday)`);
+    console.log(`  no-send dates:    ${s.enquiry_no_send_dates.length ? s.enquiry_no_send_dates.join(", ") : "none set. Bank holidays are NOT known to the system: add them to enquiry_no_send_dates"}`);
+    console.log(`  sending stops for the day after: more than ${s.enquiry_max_failures_a_day} failed sends or bounces, any reply that reads as a complaint, or the mailbox refusing the login`);
     console.log(`  shortlist rule:   capture score at or below ${s.capture_threshold}, estimated leak (high end) at least £${s.min_estimated_leak} when one can be made`);
   } else {
     throw new Error("Use: suppress, or settings");

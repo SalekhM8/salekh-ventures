@@ -82,6 +82,17 @@ const businessType = z.strictObject({
   forbidden_topics: z.array(z.string().trim().min(2).max(40)).max(200).default([]),
   /** What is said back to the drafting model when one of them is found. */
   forbidden_reason: z.string().trim().max(300).default("it gives personal circumstances. Ask only about the price or availability of the service"),
+  /**
+   * THE SERVICES LOOKED FOR, by name, each with the words (or starts of words) that show a business offers it.
+   * They do three jobs. A business of this trade that offers none of them is not what is being looked for (when
+   * `require_target_service` is on). An enquiry asks about exactly one of them, by this name, never a vague
+   * phrase. And a draft that does not name one is refused. EDITABLE.
+   */
+  target_services: z.array(z.strictObject({ name: z.string().trim().min(3).max(80), terms: z.array(z.string().trim().toLowerCase().min(3).max(40)).min(1).max(20) })).max(30).default([]),
+  /** true: a business must be seen to offer one of the services above before it is tested. false: the trade itself is enough. */
+  require_target_service: z.boolean().default(false),
+  /** What is asked about when the trade is enough and no listed service was seen. Always a named service, never "your services". */
+  default_service: z.string().trim().min(3).max(80).default("an initial consultation"),
   /** false: email is not a fair test of this kind of business, so none is sent and it is judged on fit alone. */
   email_test: z.boolean().default(true),
   /** A caution printed on every card of this kind. */
@@ -110,6 +121,12 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     enquiry_guidance: "Ask the price of one named treatment and when a consultation or appointment for it is next available.",
     forbidden_topics: [...HEALTH_WORDS],
     forbidden_reason: "it describes a health problem or personal circumstances. Ask only about the price or availability of the treatment",
+    target_services: [
+      { name: "dental implants", terms: ["implant"] }, { name: "Invisalign", terms: ["invisalign", "aligner"] }, { name: "braces", terms: ["orthodont", "brace"] },
+      { name: "veneers", terms: ["veneer"] }, { name: "composite bonding", terms: ["bonding"] }, { name: "teeth whitening", terms: ["whitening"] },
+      { name: "anti-wrinkle injections", terms: ["botox", "anti-wrinkle", "anti wrinkle"] }, { name: "dermal fillers", terms: ["filler"] }, { name: "laser hair removal", terms: ["laser hair"] },
+    ],
+    default_service: "a new patient consultation",
     ask_for: "the owner or the practice manager",
     job_search_hint: "dental clinic",
   },
@@ -121,6 +138,13 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     forbidden_topics: ["my divorce", "my ex", "my husband", "my wife", "my partner", "my children", "custody", "my case", "our case", "my dispute", "court", "being sued", "injunction", "abuse",
       "we are buying", "i am buying", "we are selling", "i am selling", "our purchase", "my purchase", "the property at", "instruct", "exchange date", "completion date"],
     forbidden_reason: "it describes a legal matter of its own or says it is instructing. Never invent a case: ask only for a fee estimate and how soon someone could speak to a new client",
+    // Conveyancing and family law only. A firm that does immigration, crime or judicial review and neither of these is not looked for.
+    target_services: [
+      { name: "conveyancing for a house purchase", terms: ["conveyanc", "house purchase", "property purchase", "buying a home", "buying a house", "residential property"] },
+      { name: "an initial family law consultation", terms: ["family law", "divorce", "separation", "child arrangement", "financial settlement", "prenup"] },
+    ],
+    require_target_service: true,
+    default_service: "conveyancing for a house purchase",
     ask_for: "the senior partner or the practice manager",
   },
   "financial-advisers": {
@@ -131,6 +155,12 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     forbidden_topics: ["my savings", "my pension", "my income", "my salary", "i earn", "we earn", "my mortgage", "my debt", "my deposit", "my credit", "i have saved", "inherit", "should i invest",
       "which fund", "what should i", "recommend", "best rate", "is it worth", "advise me", "what would you advise"],
     forbidden_reason: "it gives financial details or asks for advice. Ask only what an initial consultation costs and when one is available",
+    target_services: [
+      { name: "an initial financial planning consultation", terms: ["financial planning", "financial advice", "financial adviser", "financial advisor", "wealth management", "retirement planning", "investment advice"] },
+      { name: "an initial mortgage consultation", terms: ["mortgage"] },
+    ],
+    require_target_service: true,
+    default_service: "an initial financial planning consultation",
     ask_for: "the principal adviser or the practice manager",
   },
   "estate-agents": {
@@ -140,6 +170,10 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     enquiry_guidance: "Ask what their fees are for selling or for letting a property, and how soon a valuation could be done.",
     forbidden_topics: ["my house", "my flat", "my home", "our house", "our home", "my property", "the address", "i live", "we live", "my landlord", "my tenant", "bedroom", "my road", "my street"],
     forbidden_reason: "it describes a property or gives an address. Ask only about their fees and how soon a valuation could be done, and do not book one",
+    target_services: [
+      { name: "selling a property", terms: ["sales", "selling", "sell your", "for sale"] }, { name: "letting a property", terms: ["letting", "lettings", "landlord", "to let", "property management"] },
+    ],
+    default_service: "selling a property",
     ask_for: "the branch owner or the manager",
   },
   accountants: {
@@ -149,6 +183,12 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     enquiry_guidance: "Ask roughly what they charge for a limited company's year end accounts and when a first call is available.",
     forbidden_topics: ["my turnover", "our turnover", "my company is called", "our company is called", "my tax bill", "i owe", "we owe", "hmrc investigation", "my utr", "my profit", "our profit", "my accountant"],
     forbidden_reason: "it gives details of a business or its money. Ask only what they charge for a limited company's accounts and when a first call is available",
+    target_services: [
+      { name: "year end accounts for a limited company", terms: ["limited compan", "year end", "annual accounts", "statutory accounts", "company accounts", "corporation tax"] },
+      { name: "monthly bookkeeping", terms: ["bookkeeping", "book-keeping", "payroll"] },
+    ],
+    require_target_service: true,
+    default_service: "year end accounts for a limited company",
     ask_for: "the owner or a partner",
   },
   trades: {
@@ -160,6 +200,13 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     forbidden_reason: "it describes a property, gives an address or makes it urgent. Ask only roughly what a typical job costs and how soon a survey could be done, and do not book one",
     // Salekh's own strategy file says trades answer email poorly: they live on the phone.
     card_note: "A trade. Trades tend to answer the phone and messages far more than email, so a poor result on an emailed test may under-report how well this business really captures enquiries. Weigh it accordingly.",
+    // Large jobs only. A handyman, a plumber on call-outs or a gutter cleaner is not looked for.
+    target_services: [
+      { name: "a new fitted kitchen", terms: ["kitchen"] }, { name: "a new bathroom", terms: ["bathroom", "wet room"] }, { name: "a new roof", terms: ["roof"] },
+      { name: "a new driveway", terms: ["driveway", "block paving", "resin bound"] }, { name: "solar panels", terms: ["solar"] },
+    ],
+    require_target_service: true,
+    default_service: "a new driveway",
     ask_for: "the owner",
   },
 };
@@ -254,6 +301,21 @@ const shape = z.strictObject({
   /** How an enquiry is signed. Salekh's own first name: no invented identity. */
   enquiry_signoff: z.string().trim().min(1).max(40).default("Salekh"),
   enquiry_max_chars: z.number().int().min(100).max(1500).default(600),
+  /**
+   * WHEN ENQUIRIES MAY BE SENT. Only on these days of the week (1 is Monday, 7 is Sunday) and between these times, in
+   * the tenant's time zone, so that nothing goes out at night and "replied the same working day" means something.
+   * Anything ready outside these hours waits for the next time they open.
+   */
+  enquiry_send_days: z.array(z.number().int().min(1).max(7)).max(7).default([1, 2, 3, 4, 5]),
+  enquiry_send_from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("09:00"),
+  enquiry_send_until: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("17:30"),
+  /**
+   * Days on which nothing is sent, as YYYY-MM-DD: bank holidays and any other. SEEDED EMPTY ON PURPOSE: the build
+   * does not know England's bank holidays and does not invent them. Salekh adds them.
+   */
+  enquiry_no_send_dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(400).default([]),
+  /** More failed sends and bounces than this in one day stop automatic sending until the next day. */
+  enquiry_max_failures_a_day: z.number().int().min(0).max(100).default(3),
   /** The least time between two enquiries going out, so they do not leave in a burst. */
   enquiry_send_gap_seconds: z.number().min(0).max(3600).default(90),
   /** How long after sending before a business is scored. */

@@ -103,14 +103,14 @@ test("bootstrap: two instances starting together set the database up once; a sec
   // ---- the first boot, by two instances at the same moment ----
   const [one, two] = await Promise.all([boot({ carried: parseCarriedConfig(encode(blob())) }), boot({ carried: parseCarriedConfig(encode(blob())) })]);
   assert.deepEqual([one.tenantId, two.tenantId], [TENANT, TENANT], "the tenant has the id that was given, so it matches the developer's machine");
-  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [11, 1], "each migration applied once; one of the two was the first boot");
+  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [12, 1], "each migration applied once; one of the two was the first boot");
   assert.deepEqual(one.roles, [`${PREFIX}_agent`, `${PREFIX}_gateway`, `${PREFIX}_ui`]);
   const counts = async () => (await bootRows(
     `select (select count(*)::int from tenants) as tenants, (select count(*)::int from businesses) as floors, (select count(*)::int from members) as members,
             (select count(*)::int from config_versions) as config, (select count(*)::int from suppressions) as suppressions, (select count(*)::int from schema_migrations) as migrations,
             (select count(*)::int from prospects) as prospects, (select count(*)::int from approvals) as approvals`))[0];
   const first = await counts();
-  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 11, 0, 0]);
+  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 12, 0, 0]);
   assert.deepEqual(await bootRows("select slug, timezone from tenants"), [{ slug: "fixture-boot", timezone: "Europe/London" }]);
 
   // what was carried is in force, as version 1, and says where it came from
@@ -153,6 +153,20 @@ test("bootstrap: two instances starting together set the database up once; a sec
   await assert.rejects(boot({ enabledTypes: ["clinics", "online-shops"] }), /not in the settings: online-shops/);
   const afterAll = await counts();
   assert.deepEqual({ ...afterAll, config: first.config + 1 }, { ...first, config: first.config + 1 });
+
+  // ---- the owner's switch for test enquiries, on a server with no shell ----
+  const rungRows = () => bootRows("select c.value, c.version, c.changed_by_kind, c.changed_by_member is not null as by_member, c.reason from config_versions c join businesses b using (business_id) where c.tenant_id = $1 and b.slug = 'salekh-ventures' and c.kind = 'rung' and c.key = 'enquiry.send_email' order by c.version", [TENANT]);
+  assert.deepEqual((await rungRows()).map((r) => r.value.rung), [2]);
+  assert.equal((await boot({ enquiryRung: 3 })).rungChanged, 1);
+  assert.deepEqual((await rungRows()).at(-1), { value: { rung: 3 }, version: 2, changed_by_kind: "member", by_member: true, reason: "set by the owner through the server's settings" });
+  assert.equal((await boot({ enquiryRung: 3 })).rungChanged, 0, "the same again writes nothing");
+  assert.equal((await boot()).rungChanged, 0, "and with none given the rung is left where it is");
+  for (const bad of [4, 1, 0, Number.NaN, 2.5]) await assert.rejects(boot({ enquiryRung: bad }), /WH_ENQUIRY_RUNG must be 2 \(each enquiry needs a yes\) or 3 \(sent without asking\)/, String(bad));
+  assert.deepEqual((await rungRows()).map((r) => r.value.rung), [2, 3], "a refused value changed nothing");
+  assert.equal((await boot({ enquiryRung: 2 })).rungChanged, 1, "and it can be taken back down the same way");
+  assert.deepEqual((await rungRows()).map((r) => r.value.rung), [2, 3, 2]);
+  const afterRung = await counts();
+  assert.deepEqual({ ...afterRung, config: 0 }, { ...first, config: 0 });
 
   // the same slug under another id is refused, not quietly made into a second tenant
   await assert.rejects(boot({ tenantId: "11111111-2222-4333-8444-555555555555" }), /another id/);
@@ -241,6 +255,7 @@ test("from the environment: a failed setup stops the start with a fixed message 
     (err) => err.message.startsWith(`${BOOTSTRAP_FAILED} while setting up the database:`) && !err.message.includes("SECRET-OWNER") && !/postgres(ql)?:\/\//.test(err.message));
   await assert.rejects(bootstrapFromEnv({ ...env, WH_BOOTSTRAP_CONFIG: "%%%" }, () => {}), (err) => err.message.startsWith(`${BOOTSTRAP_FAILED} while reading WH_BOOTSTRAP_CONFIG:`));
   await assert.rejects(bootstrapFromEnv({ ...env, WH_TENANT_ID: "not-a-uuid" }, () => {}), (err) => err.message.startsWith(BOOTSTRAP_FAILED));
+  for (const bad of ["4", "three", "23", " "]) await assert.rejects(bootstrapFromEnv({ ...env, WH_ENQUIRY_RUNG: bad }, () => {}), (err) => err.message.startsWith(`${BOOTSTRAP_FAILED} while setting up the database: WH_ENQUIRY_RUNG must be 2`), `"${bad}" is refused loudly`);
   assert.equal(scrub(`could not connect to ${wrong.toString()} with password SECRET-OWNER-PASSWORD-123 or ${PASSWORDS.ui}`, { ...env, DATABASE_URL_ADMIN: wrong.toString() }),
     "could not connect to [database url] with password [secret] or [secret]");
   // and it works, saying what it did in one line with nothing secret in it

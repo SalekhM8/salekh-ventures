@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { ModelCaller } from "../agents/model-caller.js";
-import { readCurrent } from "../control/config.js";
+import { readCurrent, readRung } from "../control/config.js";
+import { emitEvent } from "../control/events.js";
 import type { Connector, ConnectorCall, ConnectorResult, ReadBackResult } from "../control/connectors/connector.js";
-import type { InboundMail, Mailbox } from "../control/connectors/mailbox.js";
+import { MailboxLoginError, type InboundMail, type Mailbox } from "../control/connectors/mailbox.js";
 import { isUniqueViolation, lock, type Db, type Tx } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import type { Gateway } from "../control/gateway.js";
 import { finishRun, startRun, tenantDay } from "../control/runs.js";
-import { asksNotToBeContacted, captureFor, estimateLeak, isAutomatic, type Capture, type EnquiryDraft, type Leak, type StoredReply, type TestResult } from "./enquiry-rules.js";
+import { asksNotToBeContacted, captureFor, estimateLeak, isAutomatic, isBounce, lintEnquiry, readsAsComplaint, type Capture, type EnquiryDraft, type Leak, type StoredReply, type TestResult } from "./enquiry-rules.js";
 export type { StoredReply, TestResult } from "./enquiry-rules.js";
 import { companyNumberKey, domainKey } from "./normalise.js";
 import { applyFilters, isGroup, scoreProspect, type Scorable } from "./score.js";
@@ -69,21 +70,25 @@ export type ProposeResult =
  * or the address already has one, the database refuses it and nothing reaches the gateway.
  */
 export async function proposeEnquiry(
-  db: Db, gateway: Gateway, scope: ProspectScope, prospect: ProspectRow, draft: EnquiryDraft, now: Date, purpose: "prospect" | "rival" = "prospect",
+  db: Db, gateway: Gateway, scope: ProspectScope, prospect: ProspectRow, draft: EnquiryDraft, now: Date, purpose: "prospect" | "rival" = "prospect", service: string | null = null,
 ): Promise<ProposeResult> {
   const to = emailFor(prospect);
   if (!to) return { proposed: false, why: "refused", detail: "no_email_published" };
   const enquiryId = randomUUID();
+  let rung = 1;
   try {
     const blocked = await db.tx(scope.tenantId, async (tx) => {
       await lock(tx, "enquiries", scope.tenantId);
+      rung = await readRung(tx, scope.businessId, ENQUIRY_ACTION);
       const row = (await tx.query("select domain_key, companies_house_number from prospects where prospect_id = $1 and business_id = $2", [prospect.prospectId, scope.businessId])).rows[0];
       if (!row) return "refused";
       if (await suppressedFor(tx, scope.businessId, { domain: row.domain_key, email: to, company: companyNumberKey(row.companies_house_number) })) return "suppressed";
       await tx.query(
-        `insert into enquiries (enquiry_id, tenant_id, business_id, prospect_id, to_address, to_address_key, subject, body, status, proposed_at, purpose)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, 'proposed', $9, $10)`,
-        [enquiryId, scope.tenantId, scope.businessId, prospect.prospectId, to, to, draft.subject, draft.body, now, purpose],
+        `insert into enquiries (enquiry_id, tenant_id, business_id, prospect_id, to_address, to_address_key, subject, body, status, proposed_at, purpose, service)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $11, $9, $10, $12)`,
+        // At rung 3 nothing waits for a yes: the enquiry is queued, and the sender puts it to the gateway in its turn,
+        // inside the sending hours and with the gap. It is never recorded as approved, because nobody approved it.
+        [enquiryId, scope.tenantId, scope.businessId, prospect.prospectId, to, to, draft.subject, draft.body, now, purpose, rung >= 3 ? "queued" : "proposed", service],
       );
       return null;
     });
@@ -92,6 +97,7 @@ export async function proposeEnquiry(
     if (isUniqueViolation(err)) return { proposed: false, why: "already_enquired" };
     throw err;
   }
+  if (rung >= 3) return { proposed: true, enquiryId, approvalId: null };
   const result = await gateway.submit({
     tenantId: scope.tenantId, businessId: scope.businessId, department: DEPARTMENT, ...(scope.runId ? { runId: scope.runId } : {}),
     actionType: ENQUIRY_ACTION, actionKey: `enquiry:${enquiryId}`,
@@ -117,12 +123,13 @@ export async function proposeEnquiry(
  * The mail connector the gateway holds. It sends exactly the stored enquiry, once. In the moment before sending
  * it claims the row (so a second attempt finds nothing to send) and checks the suppression list again.
  */
-export function createMailConnector(options: { db: Db; mailbox: Mailbox | null; now?: () => Date }): Connector {
+export function createMailConnector(options: { db: Db; mailbox: Mailbox | null; now?: () => Date; onLoginFailure?: (tenantId: string, businessId: string) => Promise<void> | void }): Connector {
   const clock = options.now ?? (() => new Date());
   return {
     async execute(call: ConnectorCall): Promise<ConnectorResult> {
       if (!options.mailbox) throw new ControlError("mail_not_configured", "the test mailbox is not configured");
       const payload = call.payload as { enquiry_id: string; prospect_id: string; to: string; subject: string; body: string };
+      let before = "proposed";
       const claimed = await options.db.tx(call.tenantId, async (tx) => {
         const row = (await tx.query(
           `select e.status, e.to_address, e.subject, e.body, p.domain_key, p.companies_house_number
@@ -131,7 +138,8 @@ export function createMailConnector(options: { db: Db; mailbox: Mailbox | null; 
           [payload.enquiry_id, payload.prospect_id, call.businessId],
         )).rows[0];
         if (!row) return "no_such_enquiry";
-        if (row.status !== "proposed" && row.status !== "approved") return "already_handled";
+        if (row.status !== "proposed" && row.status !== "approved" && row.status !== "queued") return "already_handled";
+        before = row.status as string;
         // What is sent is what is stored, and what was approved is the same thing.
         if (row.to_address !== payload.to || row.subject !== payload.subject || row.body !== payload.body) return "enquiry_changed";
         if (await suppressedFor(tx, call.businessId, { domain: row.domain_key, email: payload.to.toLowerCase(), company: companyNumberKey(row.companies_house_number) })) {
@@ -146,9 +154,15 @@ export function createMailConnector(options: { db: Db; mailbox: Mailbox | null; 
       let messageId: string;
       try {
         ({ messageId } = await options.mailbox.send({ to: payload.to, subject: payload.subject, text: payload.body }));
-      } catch {
+      } catch (err) {
+        if (err instanceof MailboxLoginError) {
+          // The login was refused, so it certainly did not go: the enquiry goes back to where it was, and sending stops for the day.
+          await options.db.tx(call.tenantId, (tx) => tx.query("update enquiries set status = $2 where enquiry_id = $1 and status = 'sending'", [payload.enquiry_id, before]));
+          await options.onLoginFailure?.(call.tenantId, call.businessId);
+          throw new ControlError("mailbox_login_failed", "the test mailbox refused the login");
+        }
         // It was claimed, so it is never tried again: it may have gone.
-        await options.db.tx(call.tenantId, (tx) => tx.query("update enquiries set status = 'failed' where enquiry_id = $1", [payload.enquiry_id]));
+        await options.db.tx(call.tenantId, (tx) => tx.query("update enquiries set status = 'failed', decided_at = coalesce(decided_at, $2) where enquiry_id = $1", [payload.enquiry_id, clock()]));
         throw new ControlError("mail_send_failed", "the mail server did not accept the message");
       }
       const sentAt = clock();
@@ -204,7 +218,7 @@ export async function allowanceLeft(db: Db, scope: ProspectScope, now: Date): Pr
     const day = await tenantDay(tx, now);
     const used = await tx.query(
       `select count(*)::int as n from enquiries e join tenants t on t.tenant_id = e.tenant_id
-        where e.business_id = $1 and e.status in ('proposed', 'approved', 'sending', 'sent', 'failed')
+        where e.business_id = $1 and e.status in ('proposed', 'queued', 'approved', 'sending', 'sent', 'failed')
           and (coalesce(e.sent_at, e.proposed_at) at time zone t.timezone)::date = $2::date`,
       [scope.businessId, day],
     );
@@ -226,6 +240,8 @@ export interface ReplyContext {
   now: () => Date;
   /** Days after sending during which a business's replies are still looked for. */
   windowDays?: number;
+  /** More failed sends and bounces than this in a day stop sending until the next. Default 3. */
+  maxFailuresADay?: number;
 }
 
 export interface ReplyCounts {
@@ -233,6 +249,10 @@ export interface ReplyCounts {
   person: number;
   automatic: number;
   optedOut: number;
+  /** Notices that an enquiry could not be delivered. */
+  bounced: number;
+  /** Replies that read as a complaint about being contacted. Each one stops automatic sending for the day. */
+  complaints: number;
 }
 
 /**
@@ -241,7 +261,7 @@ export interface ReplyCounts {
  * machine sent it. Nothing is ever sent back.
  */
 export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
-  const counts: ReplyCounts = { enquiriesChecked: 0, person: 0, automatic: 0, optedOut: 0 };
+  const counts: ReplyCounts = { enquiriesChecked: 0, person: 0, automatic: 0, optedOut: 0, bounced: 0, complaints: 0 };
   if (!ctx.mailbox) return counts;
   const now = ctx.now();
   const since = new Date(now.getTime() - (ctx.windowDays ?? 3) * 24 * 60 * 60 * 1000);
@@ -264,7 +284,11 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
     let found: InboundMail[];
     try {
       found = await ctx.mailbox.findReplies({ messageId: e.message_id, address: e.to_address_key, ownDomain, since: e.sent_at });
-    } catch {
+    } catch (err) {
+      if (err instanceof MailboxLoginError) {
+        await tripBreaker(ctx.db, ctx.tenantId, e.business_id as string, "mailbox_login", ctx.now());
+        break; // the login is refused for every enquiry alike
+      }
       continue; // the mailbox could not be read just now: try again on the next round
     }
     const result: TestResult = (e.test_result as TestResult | null) ?? { enquiry_id: e.enquiry_id, sent_at: (e.sent_at as Date).toISOString(), replies: [] };
@@ -276,6 +300,15 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
       const stored: StoredReply = { message_id: mail.messageId, received_at: mail.receivedAt.toISOString(), kind: "unclear", matched_by: mail.matchedBy, text: mail.text.slice(0, 6000) };
       const machine = isAutomatic(mail.headers, mail.subject);
       let optOut = asksNotToBeContacted(mail.text);
+      // Could not be delivered: the business never saw it. Not a reply, not a result, and one more towards the day's limit of failures.
+      if (isBounce(mail.from, mail.subject)) {
+        stored.kind = "bounce";
+        stored.text = "";
+        counts.bounced += 1;
+        result.replies.push(stored);
+        continue;
+      }
+      let complaint = machine !== true && readsAsComplaint(mail.text);
       if (machine === true) stored.kind = "automatic";
       else if (ctx.model && ctx.apiKey) {
         // The headers do not settle it: one cheap call reads the reply. Its cost goes on a run for this room.
@@ -293,12 +326,19 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
             stored.answered = reading.answered;
             stored.next_step = reading.nextStep;
             optOut = optOut || reading.asksNotToBeContacted;
+            complaint = complaint || reading.asksNotToBeContacted;
           }
         }
       }
       if (stored.kind === "person") counts.person += 1;
       if (stored.kind === "automatic") counts.automatic += 1;
       result.replies.push(stored);
+      if (complaint) {
+        // Somebody minds being contacted. Automatic sending stops for the day, and this business is never written to again.
+        counts.complaints += 1;
+        optOut = true;
+        await tripBreaker(ctx.db, ctx.tenantId, e.business_id as string, "complaint", ctx.now());
+      }
       if (optOut && !result.opted_out) {
         result.opted_out = true;
         counts.optedOut += 1;
@@ -318,6 +358,8 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
     }
     await ctx.db.tx(ctx.tenantId, (tx) => tx.query("update prospects set test_result = $2::jsonb where prospect_id = $1", [e.prospect_id, JSON.stringify(result)]));
   }
+  // Bounces count with failed sends towards the day's limit.
+  if (counts.bounced > 0 && open[0]) await checkFailures(ctx.db, ctx.tenantId, open[0].business_id as string, ctx.maxFailuresADay ?? 3, ctx.now());
   for (const [business, runId] of Object.entries(runs)) {
     if (!runId) continue;
     const t = totals[business] as StageTotals;
@@ -402,7 +444,10 @@ export async function scoreTested(
       const minutesToReply = people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null;
       const price = typeof p.analysis?.highest_value_price === "object" && p.analysis.highest_value_price !== null ? (p.analysis.highest_value_price as { amount: number; source_url: string }) : null;
       const leak = estimateLeak(price, { minutesToReply }, own);
-      const verdict = test.opted_out ? { keep: false as const, reason: "opted_out" } : applyFilters(scorable, untested);
+      const verdict = test.opted_out ? { keep: false as const, reason: "opted_out" }
+        // The enquiry never reached them, so their silence says nothing about how they answer.
+        : test.replies.some((r) => r.kind === "bounce") ? { keep: false as const, reason: "enquiry_bounced" }
+        : applyFilters(scorable, untested);
       const reason = !verdict.keep ? verdict.reason
         : capture.score !== null && capture.score > settings.capture_threshold ? "captures_well"
         // Only when an estimate exists. With none, the business is judged on capture and fit alone.
@@ -424,17 +469,163 @@ export async function scoreTested(
 }
 
 /** Where the day's enquiries have got to, for the shortlist's opening lines. */
-export async function enquiryCounts(db: Db, scope: ProspectScope, settings: OutreachSettings, now: Date): Promise<{ waiting_for_approval: number; approved_not_sent: number; sent_awaiting: number; scored: number }> {
+export async function enquiryCounts(db: Db, scope: ProspectScope, settings: OutreachSettings, now: Date): Promise<{ waiting_for_approval: number; approved_not_sent: number; queued_to_send: number; sent_awaiting: number; scored: number }> {
   const due = new Date(now.getTime() - settings.reply_wait_hours * 60 * 60 * 1000);
   return db.tx(scope.tenantId, async (tx) => {
     const r = (await tx.query(
       `select count(*) filter (where e.status = 'proposed')::int as waiting,
               count(*) filter (where e.status = 'approved')::int as approved,
+              count(*) filter (where e.status = 'queued')::int as queued,
               count(*) filter (where e.status = 'sent' and e.sent_at > $2)::int as awaiting,
               count(*) filter (where e.status = 'sent' and p.capture_score is not null)::int as scored
          from enquiries e join prospects p on p.prospect_id = e.prospect_id where e.business_id = $1`,
       [scope.businessId, due],
     )).rows[0];
-    return { waiting_for_approval: r.waiting, approved_not_sent: r.approved, sent_awaiting: r.awaiting, scored: r.scored };
+    return { waiting_for_approval: r.waiting, approved_not_sent: r.approved, queued_to_send: r.queued, sent_awaiting: r.awaiting, scored: r.scored };
+  });
+}
+
+// ---- circuit breakers ------------------------------------------------------------------
+
+export type BreakerReason = "send_failures" | "complaint" | "mailbox_login";
+const BREAKER: Record<BreakerReason, string> = {
+  send_failures: "too many enquiries failed to send or bounced today",
+  complaint: "a reply read as a complaint about being contacted",
+  mailbox_login: "the test mailbox refused the login",
+};
+
+/**
+ * Stop automatic sending for the rest of the tenant's day, and say why. Kept in the event stream, so it holds
+ * across a restart and is on the record. The first reason of the day stands; later ones are not piled on.
+ */
+export async function tripBreaker(db: Db, tenantId: string, businessId: string, why: BreakerReason, now: Date): Promise<void> {
+  await db.tx(tenantId, async (tx) => {
+    await lock(tx, "enquiry-breaker", tenantId);
+    if (await breakerIn(tx, now)) return;
+    await emitEvent(tx, { tenantId, businessId, department: DEPARTMENT, type: "stage", reasonCode: `enquiry_breaker_${why}`, summary: `Sending stopped for today: ${BREAKER[why]}`, now });
+  });
+}
+
+async function breakerIn(tx: Tx, now: Date): Promise<string | null> {
+  const row = (await tx.query(
+    `select e.reason_code from events e join tenants t on t.tenant_id = e.tenant_id
+      where e.type = 'stage' and e.reason_code like 'enquiry\\_breaker\\_%'
+        and (e.created_at at time zone t.timezone)::date = (($1::timestamptz) at time zone t.timezone)::date
+      order by e.seq limit 1`,
+    [now],
+  )).rows[0];
+  return row ? BREAKER[(row.reason_code as string).slice("enquiry_breaker_".length) as BreakerReason] ?? "a safety check" : null;
+}
+
+/** Why sending is stopped today, in plain words, or null when it is not. */
+export function breakerToday(db: Db, tenantId: string, now: Date): Promise<string | null> {
+  return db.tx(tenantId, (tx) => breakerIn(tx, now));
+}
+
+/** Failed sends and bounces today. Past the day's limit, sending stops. Returns true when it has just been stopped, or already was. */
+export async function checkFailures(db: Db, tenantId: string, businessId: string, limit: number, now: Date): Promise<boolean> {
+  const n = await db.tx(tenantId, async (tx) => (await tx.query(
+    `select (select count(*) from enquiries e join tenants t on t.tenant_id = e.tenant_id
+              where e.status = 'failed' and (coalesce(e.decided_at, e.proposed_at) at time zone t.timezone)::date = (($1::timestamptz) at time zone t.timezone)::date)
+          + (select count(*) from prospects p join tenants t on t.tenant_id = p.tenant_id, jsonb_array_elements(coalesce(p.test_result -> 'replies', '[]'::jsonb)) r
+              where r ->> 'kind' = 'bounce' and ((r ->> 'received_at')::timestamptz at time zone t.timezone)::date = (($1::timestamptz) at time zone t.timezone)::date) as n`,
+    [now],
+  )).rows[0].n);
+  if (Number(n) <= limit) return false;
+  await tripBreaker(db, tenantId, businessId, "send_failures", now);
+  return true;
+}
+
+// ---- when the rung changes under enquiries already waiting ------------------------------
+
+/**
+ * Enquiries waiting for a yes when their action moved to rung 3. NOBODY APPROVES THEM ON ANYONE'S BEHALF. Each
+ * waiting approval is withdrawn (voided, reason rung_changed), and its enquiry, if it still passes every check in
+ * force today, is queued to be put to the gateway afresh at the rung now in force. One that no longer passes is
+ * closed unsent, leaving the business free to be drafted for again. One event each.
+ */
+export async function requeueAfterRungChange(db: Db, tenantId: string, settingsOf: (businessId: string) => Promise<OutreachSettings>, now: Date): Promise<{ requeued: number; dropped: number }> {
+  const waiting = await db.tx(tenantId, async (tx) => (await tx.query(
+    `select e.enquiry_id, e.business_id, e.subject, e.body, e.service, a.approval_id, p.business_type
+       from enquiries e join approvals a on a.approval_id = e.approval_id join prospects p on p.prospect_id = e.prospect_id
+      where e.status = 'proposed' and a.status = 'pending' and a.action_type = $1 order by e.proposed_at`,
+    [ENQUIRY_ACTION],
+  )).rows);
+  const done = { requeued: 0, dropped: 0 };
+  for (const row of waiting) {
+    const businessId = row.business_id as string;
+    const settings = forType(await settingsOf(businessId), row.business_type as string);
+    const passes = lintEnquiry({ subject: row.subject, body: row.body }, settings, row.service as string | null).length === 0;
+    const moved = await db.tx(tenantId, async (tx) => {
+      if ((await readRung(tx, businessId, ENQUIRY_ACTION)) < 3) return false;
+      const voided = await tx.query("update approvals set status = 'voided', void_reason = 'rung_changed', decided_at = $2 where approval_id = $1 and status = 'pending'", [row.approval_id, now]);
+      if ((voided.rowCount ?? 0) === 0) return false; // answered in the meantime: left as it was answered
+      await tx.query("update enquiries set status = $2, approval_id = null where enquiry_id = $1 and status = 'proposed'", [row.enquiry_id, passes ? "queued" : "expired"]);
+      await emitEvent(tx, {
+        tenantId, businessId, department: DEPARTMENT, type: "voided", reasonCode: "rung_changed", now,
+        summary: passes
+          ? "An enquiry waiting for a yes was withdrawn because enquiries now send without asking. It was not approved: it is queued to be sent at the rung now in force"
+          : "An enquiry waiting for a yes was withdrawn because enquiries now send without asking. It no longer passes the checks, so it will not be sent",
+        payload: { approvalId: row.approval_id },
+      });
+      return true;
+    });
+    if (moved) done[passes ? "requeued" : "dropped"] += 1;
+  }
+  return done;
+}
+
+// ---- what was sent, to read afterwards ---------------------------------------------------
+
+export interface SentEnquiry {
+  id: string;
+  business: string;
+  town: string | null;
+  kind: string;
+  purpose: string;
+  to: string;
+  subject: string;
+  body: string;
+  status: string;
+  proposedAt: string;
+  sentAt: string | null;
+  /** true: it went at rung 3, with nobody's yes. false: a person approved it. */
+  withoutApproval: boolean;
+}
+
+/** Enquiries of one room since a moment, newest first. PERSONAL DATA: who was written to and exactly what was said. */
+export async function listEnquiries(db: Db, tenantId: string, businessId: string, since: Date, limit = 500): Promise<SentEnquiry[]> {
+  return db.tx(tenantId, async (tx) => (await tx.query(
+    `select e.enquiry_id, p.name, coalesce(p.search_area, p.area) as town, p.business_type, e.purpose, e.to_address, e.subject, e.body, e.status, e.proposed_at, e.sent_at, e.approval_id
+       from enquiries e join prospects p on p.prospect_id = e.prospect_id
+      where e.business_id = $1 and coalesce(e.sent_at, e.proposed_at) >= $2
+      order by coalesce(e.sent_at, e.proposed_at) desc, e.enquiry_id limit $3`,
+    [businessId, since, limit],
+  )).rows.map((r) => ({
+    id: r.enquiry_id, business: r.name, town: r.town, kind: r.business_type, purpose: r.purpose, to: r.to_address, subject: r.subject, body: r.body, status: r.status,
+    proposedAt: (r.proposed_at as Date).toISOString(), sentAt: r.sent_at ? (r.sent_at as Date).toISOString() : null, withoutApproval: r.approval_id === null && r.status !== "proposed",
+  })));
+}
+
+/**
+ * For the shortlist's opening line: what has been sent without asking and not yet told of on an earlier
+ * shortlist, kind by kind. No names, no addresses. Which enquiries a shortlist has told of is kept on that
+ * shortlist (their ids), so none is told of twice and none is missed, whatever the clock says.
+ */
+export async function sentWithoutAsking(db: Db, scope: ProspectScope, now: Date): Promise<{ total: number; by_kind: Record<string, number>; ids: string[] }> {
+  return db.tx(scope.tenantId, async (tx) => {
+    const since = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const rows = (await tx.query(
+      `select e.enquiry_id, p.business_type from enquiries e join prospects p on p.prospect_id = e.prospect_id
+        where e.business_id = $1 and e.status = 'sent' and e.approval_id is null and e.sent_at > $2
+          and not exists (
+            select 1 from outputs o, jsonb_array_elements_text(coalesce(o.data -> 'enquiries' -> 'sent_without_asking' -> 'ids', '[]'::jsonb)) told
+             where o.business_id = e.business_id and o.department = $3 and o.created_at > $2 and told = e.enquiry_id::text)
+        order by e.sent_at, e.enquiry_id`,
+      [scope.businessId, since, DEPARTMENT],
+    )).rows;
+    const by_kind: Record<string, number> = {};
+    for (const r of rows) by_kind[r.business_type as string] = (by_kind[r.business_type as string] ?? 0) + 1;
+    return { total: rows.length, by_kind, ids: rows.map((r) => r.enquiry_id as string) };
   });
 }

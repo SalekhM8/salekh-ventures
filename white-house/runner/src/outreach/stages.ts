@@ -165,6 +165,7 @@ export const analysisSchema = z.object({
   is_match: z.boolean().describe("False if the pages show this is not the kind of business being looked for."),
   what_they_sell: saidField,
   highest_value_service: saidField,
+  target_service: saidField.describe('Which ONE of the target services listed in the request the pages show this business offers, in the pages\' own words. "" and page 0 if it offers none of them.'),
   highest_value_price: countedField.describe("The price in pounds the pages publish for that service, as a number. 0 when no price is published. Never estimate one."),
   staff_count: countedField.describe("How many staff the pages name or state. Count only what is shown."),
   locations: countedField.describe("How many premises."),
@@ -247,6 +248,7 @@ export function buildAnalysis(out: AnalysisOut, pages: Page[], extracted: Extrac
     opening_hours: fact(out.opening_hours),
     group: fact(out.part_of_group),
     highest_value_price: price,
+    target_service: fact(out.target_service),
     ...(extracted.websiteBuiltBy ? { website_built_by: extracted.websiteBuiltBy } : {}),
   };
   const signals = (out.signals ?? [])
@@ -264,7 +266,8 @@ export async function analyseBusiness(
   const body = pages.map((page, i) => `=== PAGE ${i + 1}: ${page.url} ===\n${page.text}`).join("\n\n");
   const user =
     `Business: ${prospect.name}${prospect.area ? `, ${prospect.area}` : ""}.\nWe are looking for: ${settings.business_type}.\n` +
-    (settings.type.high_value_guidance ? `Its highest value service: ${settings.type.high_value_guidance}\n` : "") + `\nSignals:\n${signals}\n\n` +
+    (settings.type.high_value_guidance ? `Its highest value service: ${settings.type.high_value_guidance}\n` : "") +
+    (settings.type.target_services.length ? `Target services (we are only looking for businesses that offer at least one of these): ${settings.type.target_services.map((t) => t.name).join("; ")}\n` : "") + `\nSignals:\n${signals}\n\n` +
     `Below are ${pages.length} pages from this business's own website. Fill in the analysis from them alone. ` +
     `If the pages do not say something, answer "" (or 0 for a number) with page 0: never guess. Give the page number for everything you report.\n\n${UNTRUSTED}\n\n----------\n${body}\n----------`;
   const reply = await model.call(apiKey, { stage: "analyse", model: "claude-haiku-5-5", system, user, schema: analysisSchema, maxTokens: 4000, effort: "low" });
@@ -350,7 +353,7 @@ export const enquirySchema = z.object({
 export const ENQUIRY_SHAPES = [
   'Open with "Hi," on its own line. Ask the price first, in one sentence. Ask about availability in a second, shorter sentence. Close with "Thanks,".',
   'Open with "Hello," on its own line. Ask about availability first, then the price, as two separate questions. Close with "Many thanks,".',
-  'Open with "Good morning," on its own line. One sentence that asks both things. Close with "Thank you,".',
+  'Open with "Hello there," on its own line. One sentence that asks both things. Close with "Thank you,".',
   'Open with "Hi there," on its own line. Start with a few words that you are trying to get an idea of the cost, then ask the price, then when they could fit a new customer in. Close with "Thanks very much,".',
   'Open with "Hello," on its own line. Begin "Quick question:" and ask the price. Then ask "Also, how soon" something could be done. Close with "Thanks,".',
   'No greeting line of its own: begin the first sentence with "Hi, " and go straight into the question. Two short sentences. Close with "Kind regards,".',
@@ -372,12 +375,12 @@ export function shapeFor(key: string): number {
 
 export async function draftEnquiry(
   model: ModelCaller, apiKey: string, system: string, settings: OutreachSettings,
-  prospect: { name: string; area: string | null; service: string | null; sells: string | null; key?: string },
+  prospect: { name: string; area: string | null; service: string | null; sells: string | null; key?: string; /** The name on the kind's list of services, when the caller has settled it: the draft must then name exactly that. */ namedService?: string | null },
 ): Promise<{ replies: ModelReply<unknown>[]; draft: EnquiryDraft | null; problems: string[] }> {
   const replies: ModelReply<unknown>[] = [];
   let problems: string[] = [];
   const type = settings.type;
-  const service = oneService(prospect.service);
+  const service = prospect.namedService ?? oneService(prospect.service);
   const about = service
     ? `The one service to ask about: ${service}`
     : `Nothing is known about a particular service. Ask about ${oneService(prospect.sells) ?? "their main service"}, in general terms.`;
@@ -386,7 +389,8 @@ export async function draftEnquiry(
     const user =
       `Business: ${prospect.name}${prospect.area ? `, ${prospect.area}` : ""}\nKind of business: ${type.name}\n` +
       `What a genuine customer of this kind of business asks: ${type.enquiry_guidance}\n${about}\n` +
-      `Ask about that one service only. Do not list others.\n` +
+      `Ask about that one service only, by name. Do not list others, and do not ask about "services" in general.\n` +
+      `Never greet by the time of day (no "Good morning"): it may be sent at another time.\n` +
       `Shape of this email: ${shape}\n` +
       (type.forbidden_topics.length ? `Never mention any of these: ${type.forbidden_topics.slice(0, 40).join(", ")}.\n` : "") +
       `Sign-off, on its own last line, exactly: ${settings.enquiry_signoff}\nNo more than ${settings.enquiry_max_chars} characters.` +
@@ -395,7 +399,7 @@ export async function draftEnquiry(
     replies.push(reply);
     if (!reply.ok || !reply.data) return { replies, draft: null, problems: [`the model call failed: ${reply.error ?? "unknown"}`] };
     const draft: EnquiryDraft = { subject: reply.data.subject.trim(), body: reply.data.body.trim() };
-    problems = lintEnquiry(draft, settings);
+    problems = lintEnquiry(draft, settings, prospect.namedService ?? null);
     if (problems.length === 0) return { replies, draft, problems: [] };
   }
   return { replies, draft: null, problems };

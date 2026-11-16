@@ -74,6 +74,20 @@ The approvals waiting in one room, oldest first. Answers 404 for an unknown room
 
 `enquiry` is present only for `enquiry.send_email` and is exactly the stored payload: what is shown is what a yes sends. **This endpoint returns personal data on purpose** (a business's name and email address, and the message). It is the only one that does. `GET /v1/house` still carries none: there the room shows `state: "waiting"` and a task line with a count only, for example `"12 enquiries waiting for your yes"`. Do not cache or log this response.
 
+## GET /v1/rooms/:roomId/enquiries?since=  (added 17 Nov 2026)
+
+What was sent from one room, newest first. `since` is an ISO date and time; without it, the last seven days. At most 500. Answers 404 for an unknown room and 422 for a `since` that is not a date.
+
+```json
+{ "enquiries": [ {
+  "id": "uuid", "business": "name", "town": "place or null", "kind": "clinics | solicitors | ...", "purpose": "prospect | rival",
+  "to": "address", "subject": "text", "body": "text", "status": "queued | proposed | approved | sending | sent | failed | rejected | expired",
+  "proposedAt": "ISO time", "sentAt": "ISO time or null", "withoutApproval": true
+} ] }
+```
+
+`withoutApproval` is true for an enquiry that went (or is queued to go) at rung 3, with nobody's yes. **Like the approvals list, this returns personal data on purpose** and must not be cached or logged. When test enquiries are at rung 3 there is nothing to approve: the room is not `waiting`, the approvals list is empty, and each shortlist opens with how many were sent without asking.
+
 ## POST /v1/approvals/batch  (added 16 Nov 2026)
 
 Body `{ "decisions": [ { "id": "uuid", "decision": "approve" | "reject", "payloadHash": "as shown" } ] }`, 1 to 200 items. Each item goes through the same code as `POST /v1/approvals/:id`, one at a time, in the order given. Always answers 200 with one result per item, in the same order:

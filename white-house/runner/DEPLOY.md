@@ -28,6 +28,7 @@ Names only. **S** marks a secret.
 | `WH_BOOTSTRAP_CONFIG` | | Optional. One line of base64 from `npm run export-config -- --base64`. Used on the first boot only; harmless to leave, tidier to remove afterwards. |
 | `WH_API_TOKEN` | **S** | 32 characters or more. The site's server sends it as a bearer token. A shorter one is refused on a public address. |
 | `WH_TRUST_PROXY` | | Set to `1` on Railway, so failed logins are counted per caller and not per proxy. |
+| `WH_ENQUIRY_RUNG` | | **The owner's switch.** `2`: each test enquiry needs a yes. `3`: test enquiries send themselves, inside the daily cap, the sending hours and the checks. Applied at each start as a new version of the rung in the owner's name, only when it changes something. Anything else stops the start. Unset: the rung is left where it is. |
 | `WH_OUTREACH_ENABLED_TYPES` | | Optional. A comma separated list of kinds of business to have switched on, and every other kind off: `clinics,solicitors,financial-advisers,estate-agents,accountants,trades`. Applied at each start, as a new version of the settings only when it changes something. Unset: the kinds are left as they are. This is how a kind is switched on the server, which has no shell. |
 | `WH_ROLE` | | `primary` (the default) or `standby`. Exactly one runner may be primary for a given test mailbox. |
 | `ANTHROPIC_API_KEY_SALEKH` | **S** | The tenant's model key. |
@@ -67,3 +68,14 @@ The server starts with no businesses on its master list. That is deliberate, and
 ## Not done: backups
 
 **There is no backup beyond whatever Railway's volume gives, and point-in-time recovery (BRIEF) is not confirmed.** Nothing in this code takes a backup: it has nowhere to put one. This is an open risk. What would close it: either Railway's own backups switched on for the Postgres service and a restore actually tried once, or an object store (a bucket) to which the runner writes a nightly `pg_dump`, with a restore tried once. Until then, a lost volume loses the master list, every suppression and the audit trail.
+
+## Enquiries that send themselves
+
+With `WH_ENQUIRY_RUNG=3`, the log line at start ends "test enquiries set to rung 3 (sent without asking)". From then on:
+
+- Enquiries already waiting for a yes are withdrawn (never approved) and, if they pass today's checks, queued. The rest are closed unsent.
+- Sending happens only on working days between 09:00 and 17:30 London time, 90 seconds apart, up to the daily cap. The daily run at 08:00 queues; sending starts at 09:00. **Bank holidays are not known to the system**: add dates to `enquiry_no_send_dates` in the outreach settings (there is no command for that yet on the server; carry it in the settings).
+- Each shortlist opens with how many were sent without asking. The full text of each is at `GET /v1/rooms/salekh-ventures:outreach/enquiries` (with the token; personal data).
+- Sending stops for the day, and the shortlist opens with the reason, after more than three failed sends or bounces, any reply that reads as a complaint, or the mailbox refusing the login.
+- To go back: set `WH_ENQUIRY_RUNG=2` and redeploy. Anything queued then waits for a yes. The kill switch (`POST /v1/kill-switch`) stops all sending at once without a deploy.
+

@@ -131,5 +131,7 @@ export function asModelAnswer(answer) {
     for (const k of ["name", "role"]) if (k in fixed && fixed[k] === null) fixed[k] = "";
     out[key] = fixed;
   }
+  // The target service, where a fixture does not say: the same as its highest value service.
+  if (!("target_service" in out) && out.highest_value_service) out.target_service = { ...out.highest_value_service };
   return out;
 }

@@ -17,8 +17,9 @@ import type { Mailbox } from "../control/connectors/mailbox.js";
 import type { Place, PlacesConnector, PlacesSearch } from "../control/connectors/places.js";
 import { PLACES_PRICE_TIERS } from "../control/connectors/places.js";
 import type { Gateway } from "../control/gateway.js";
-import { allowanceLeft, collectReplies, emailFor, enquiryCounts, notTestableReason, proposeEnquiry, scoreTested, syncDecisions, type ReplyCounts, type TestedProspect } from "./enquiries.js";
-import { captureFor, estimateLeak, openAt, sayMinutes, type TestResult } from "./enquiry-rules.js";
+import { allowanceLeft, breakerToday, collectReplies, emailFor, ENQUIRY_ACTION, enquiryCounts, notTestableReason, proposeEnquiry, requeueAfterRungChange, scoreTested, sentWithoutAsking, syncDecisions, type ReplyCounts, type TestedProspect } from "./enquiries.js";
+import { readRung } from "../control/config.js";
+import { captureFor, estimateLeak, openAt, sayMinutes, serviceFor, type TestResult } from "./enquiry-rules.js";
 import { bestRoute, leadAgentFor, namedGroup } from "./score.js";
 import { enabledTypes, forType, SIGNAL_MEANING, type OutreachSettings, type Signal } from "./settings.js";
 import { addInto, addTo, analyseBusiness, classifyLeads, draftCard, draftEnquiry, factsFor, noTotals, type Lead, type StageTotals } from "./stages.js";
@@ -71,6 +72,8 @@ export interface OutreachContext {
   mailbox: Mailbox | null;
   /** The gateway: the only way an enquiry can be sent. */
   gateway: Gateway;
+  /** Called when enquiries have been queued or put forward, so the sender can start on those that need no yes. */
+  afterEnquiries?: () => void;
   changed: () => void;
 }
 
@@ -232,8 +235,14 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   // First of all: what came back. Decisions are brought up to date and the mailbox is searched for replies.
   if (testing) {
     await syncDecisions(db, tenantId, clock());
+    // Enquiries that were waiting for a yes when their action moved to rung 3 are withdrawn and queued afresh. Nobody approves them.
+    const moved = await requeueAfterRungChange(db, tenantId, async () => settings, clock());
+    if (moved.requeued + moved.dropped > 0) {
+      notes.push(`${moved.requeued + moved.dropped} ${moved.requeued + moved.dropped === 1 ? "enquiry that was" : "enquiries that were"} waiting for your yes ${moved.requeued + moved.dropped === 1 ? "was" : "were"} withdrawn, because enquiries now send without asking. ` +
+        `${moved.requeued} passed today's checks and ${moved.requeued === 1 ? "is" : "are"} queued to be sent; ${moved.dropped} did not and will not be sent. None was approved.`);
+    }
     replyCounts = await collectReplies({
-      db, tenantId, mailbox: ctx.mailbox, model, apiKey: ctx.apiKey, system: prompts.reply, usdToGbp: ctx.usdToGbp, now: clock, windowDays: settings.reply_window_days,
+      db, tenantId, mailbox: ctx.mailbox, model, apiKey: ctx.apiKey, system: prompts.reply, usdToGbp: ctx.usdToGbp, now: clock, windowDays: settings.reply_window_days, maxFailuresADay: settings.enquiry_max_failures_a_day,
     }).catch(() => null);
   }
   // Second: score every business whose enquiry is old enough. Code only, so it is done before anything that can be limited or stopped.
@@ -754,9 +763,13 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
         }
         await stage(`Drafting enquiry ${index + 1} of ${list.length}`, "enquiries");
         const a = want.prospect.analysis;
+        const kindSettings = forType(settings, want.prospect.typeId);
+        // One named service from the kind's own list. With none, nothing is asked: a vague enquiry is not sent.
+        const namedService = serviceFor(a, kindSettings);
+        if (namedService === null) continue;
         const said = (f: unknown) => (typeof f === "object" && f !== null ? String((f as { value?: unknown }).value ?? "") : "") || null;
-        const { replies, draft } = await draftEnquiry(model, ctx.apiKey, prompts.enquiry, forType(settings, want.prospect.typeId), {
-          key: want.prospect.prospectId,
+        const { replies, draft } = await draftEnquiry(model, ctx.apiKey, prompts.enquiry, kindSettings, {
+          key: want.prospect.prospectId, namedService,
           name: want.prospect.name, area: want.prospect.area, service: said(a?.highest_value_service), sells: said(a?.what_they_sell),
         }).catch(() => ({ replies: [], draft: null }));
         for (const reply of replies) addTo(costs.enquiries, reply);
@@ -767,7 +780,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
           continue;
         }
         if (!draft) { tally.enquiries_dropped += 1; continue; }
-        const result = await proposeEnquiry(db, ctx.gateway, scope(runId), want.prospect, draft, clock(), want.purpose);
+        const result = await proposeEnquiry(db, ctx.gateway, scope(runId), want.prospect, draft, clock(), want.purpose, namedService);
         if (result.proposed) {
           tally.enquiries_proposed[want.purpose] += 1;
           allowance -= 1;
@@ -777,6 +790,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
         }
       }
       await close(runId, costs.enquiries, null);
+      ctx.afterEnquiries?.();
       if (wanted.length > list.length) notes.push(`${wanted.length - list.length} more businesses are ready for a test enquiry and wait for tomorrow's allowance.`);
       if (tally.enquiries_dropped > 0) notes.push(`${tally.enquiries_dropped} drafted enquiries broke the written rules twice and were dropped. Those businesses wait for another run.`);
     }
@@ -882,7 +896,15 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   }
   if (limited.some((l) => l.why === "need_login")) notes.push("Job adverts from LinkedIn were not available on this run: the source asked for a signed in session, which is not used. Other sources were searched.");
   if (settings.test_enquiries && !ctx.mailbox) notes.push("**Test enquiries are switched on but the test mailbox is not configured**, so none was drafted and this shortlist is made from fit and signals alone.");
-  const enquiries = testing ? await enquiryCounts(db, scope(lastRunId), settings, clock()) : null;
+  const counts = testing ? await enquiryCounts(db, scope(lastRunId), settings, clock()) : null;
+  // The digest: what went out without anybody's yes and has not been told of on an earlier shortlist.
+  const enquiries = counts === null ? null : {
+    ...counts,
+    rung: await db.tx(tenantId, (tx) => readRung(tx, businessId, ENQUIRY_ACTION)),
+    sent_without_asking: await sentWithoutAsking(db, scope(lastRunId), clock()),
+    stopped: await breakerToday(db, tenantId, clock()),
+    room: `${ctx.businessSlug}:${DEPARTMENT}`,
+  };
   const day = await db.tx(tenantId, (tx) => tenantDay(tx, clock()));
   const money = Object.fromEntries(
     (Object.entries(costs) as [string, StageTotals][]).map(([name, t]) => [name, {
@@ -1022,7 +1044,7 @@ const shown = (value: unknown): string => {
 export function renderShortlist(
   title: string, settings: OutreachSettings, tally: Tally, cards: Card[],
   costs: Record<string, any>, fetches: FetchCounts, notes: string[], companiesHouseChecked: boolean, areas: string[],
-  enquiries: { waiting_for_approval: number; approved_not_sent: number; sent_awaiting: number; scored: number } | null,
+  enquiries: { waiting_for_approval: number; approved_not_sent: number; queued_to_send?: number; sent_awaiting: number; scored: number; sent_without_asking?: { total: number; by_kind: Record<string, number>; ids?: string[] }; rung?: number; stopped?: string | null; room?: string } | null,
   timezone = "Europe/London",
 ): string {
   const filtered = Object.entries(tally.filtered_out).sort(([a], [b]) => a.localeCompare(b));
@@ -1033,7 +1055,15 @@ export function renderShortlist(
     `Looking for ${settings.business_types.filter((t) => t.enabled).map((t) => t.name).join("; ") || "nothing: no kind of business is switched on"} in ${settings.area}. Searched this run: ${areas.join(", ") || "nowhere new"}.`, "",
     ...(enquiries
       ? [
+          ...(enquiries.stopped ? [`**SENDING IS STOPPED FOR TODAY: ${enquiries.stopped}.** Nothing more is sent until tomorrow. Look at this before then.`, ""] : []),
+          ...(enquiries.rung !== undefined && enquiries.rung >= 3
+            ? [`**Sent without asking since the last shortlist was written: ${enquiries.sent_without_asking?.total ?? 0}**` +
+                `${(enquiries.sent_without_asking?.total ?? 0) > 0 ? ` (${Object.entries(enquiries.sent_without_asking?.by_kind ?? {}).map(([kind, n]) => `${kind} ${n}`).join(", ")})` : ""}. ` +
+                `Test enquiries send themselves, inside the daily limit and the sending hours (${settings.enquiry_send_from} to ${settings.enquiry_send_until} on working days). ` +
+                `The full text of each, and who it went to, is in the room's list of sent enquiries (GET /v1/rooms/${enquiries.room ?? "<room>"}/enquiries).`, ""]
+            : []),
           `**Test enquiries:** ${enquiries.waiting_for_approval} waiting for your approval, ${enquiries.approved_not_sent} approved and waiting to be sent, ` +
+            `${(enquiries.queued_to_send ?? 0) > 0 ? `${enquiries.queued_to_send} queued to send without asking, ` : ""}` +
             `${enquiries.sent_awaiting} sent and inside their ${settings.reply_wait_hours} hours, ${enquiries.scored} scored so far.`,
           ...(tally.scored_after_test === 0 ? [`No enquiry was ${settings.reply_wait_hours} hours old on this run, so no business has a new test result today.`] : []),
           "",

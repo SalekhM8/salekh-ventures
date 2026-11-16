@@ -1,6 +1,6 @@
 import { actionTypes } from "../control/action-types.js";
 import { canonicalJson } from "../control/hash.js";
-import { promoteRung, readCurrent, readRung, setConfig } from "../control/config.js";
+import { promoteRung, readCurrent, readRung, setConfig, writeVersion } from "../control/config.js";
 import type { Db } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import { companyNumberKey, domainKey } from "./normalise.js";
@@ -64,6 +64,11 @@ export interface SettingsChange {
   enquiriesPerDay?: number;
   /** Let test enquiries be put forward for approval: moves the action from rung 1 (recommend only) to rung 2. */
   allowEnquiries?: boolean;
+  /**
+   * The rung for test enquiries: 1 stored only, 2 each needs a yes, 3 sent without asking inside the limits.
+   * The owner's decision. Never past the ceiling fixed in code for the action.
+   */
+  enquiryRung?: number;
   /** Kinds of business to switch on or off, by id. "all" stands for every kind in the list. */
   enableTypes?: string[];
   disableTypes?: string[];
@@ -125,6 +130,19 @@ export async function changeOutreachSettings(db: Db, tenantId: string, roomId: s
     const rung = await db.tx(tenantId, (tx) => readRung(tx, room.businessId, ENQUIRY_ACTION));
     // One rung at a time, and only up to "act with approval": this command never takes it further.
     if (rung === 1) await promoteRung(db, actionTypes, { tenantId, businessId: room.businessId, actionType: ENQUIRY_ACTION, memberId: room.ownerId, reason: "test enquiries allowed, each needing approval" });
+  }
+  if (change.enquiryRung !== undefined) {
+    const ceiling = actionTypes.get(ENQUIRY_ACTION)?.maxRung ?? 1;
+    if (!Number.isInteger(change.enquiryRung) || change.enquiryRung < 1 || change.enquiryRung > ceiling) {
+      throw new ControlError("invalid_request", `the rung for test enquiries must be a whole number from 1 to ${ceiling}. ${ceiling} is the ceiling fixed in code and nothing here can go past it`);
+    }
+    const reason = "set by the owner from the command line";
+    let rung = await db.tx(tenantId, (tx) => readRung(tx, room.businessId, ENQUIRY_ACTION));
+    // Up: one rung at a time, each its own version. Down: straight to where it is wanted.
+    while (rung < change.enquiryRung) rung = (await promoteRung(db, actionTypes, { tenantId, businessId: room.businessId, actionType: ENQUIRY_ACTION, memberId: room.ownerId, reason })).rung;
+    if (rung > change.enquiryRung) {
+      await db.tx(tenantId, (tx) => writeVersion(tx, { tenantId, businessId: room.businessId, kind: "rung", key: ENQUIRY_ACTION, value: { rung: change.enquiryRung }, changedByKind: "member", memberId: room.ownerId, reason }));
+    }
   }
   return readOutreachSettings(db, tenantId, roomId);
 }
