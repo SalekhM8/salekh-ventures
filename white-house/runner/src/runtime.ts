@@ -19,8 +19,8 @@ import { countWaiting } from "./outreach/store.js";
 import type { Mailbox } from "./control/connectors/mailbox.js";
 import type { PlacesConnector } from "./control/connectors/places.js";
 import type { DirectReader } from "./control/connectors/direct-read.js";
-import { breakerToday, checkFailures, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
-import { lintEnquiry, withinSendingHours } from "./outreach/enquiry-rules.js";
+import { assignMissingSlots, breakerToday, checkFailures, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
+import { lintEnquiry, nextOpening, openAt, scoreAfter, slotAt, type Slot } from "./outreach/enquiry-rules.js";
 import { replyPrompt } from "./outreach/pipeline.js";
 import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
@@ -531,6 +531,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       return parseOutreachSettings({}); // settings that do not parse stop a run elsewhere; here the defaults are the cautious choice
     }
   };
+  async function recordSend(row: any, slot: Slot, settings: OutreachSettings): Promise<void> {
+    const sent = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select sent_at from enquiries where enquiry_id = $1", [row.enquiry_id])).rows[0]?.sent_at as Date | undefined);
+    if (!sent) return;
+    const periods = (row.places as { opening_hours?: { periods?: Parameters<typeof openAt>[0] } } | null)?.opening_hours?.periods ?? null;
+    const state = periods && periods.length > 0 ? (openAt(periods, sent, row.timezone as string) ? "open" : "closed") : "unknown";
+    const shut = state === "closed" || (state === "unknown" && slot !== "in_hours");
+    const opens = shut ? nextOpening(sent, row.timezone as string, periods, settings) : null;
+    await gatewayDb.tx(tenantId, async (tx) => {
+      await tx.query("update enquiries set sent_slot = $2, opening_state = $3 where enquiry_id = $1", [row.enquiry_id, slot, state]);
+      await tx.query("update prospects set test_result = coalesce(test_result, '{}'::jsonb) || $2::jsonb where prospect_id = $1", [row.prospect_id, JSON.stringify({
+        slot, opening_state: state, ...(opens ? { next_opening: opens.toISOString() } : {}), score_after: scoreAfter(sent, slot, row.timezone as string, settings).toISOString(),
+      })]);
+    });
+  }
+
   /** Enquiries that were waiting for a yes when their action moved to rung 3: withdrawn, never approved, and queued afresh if they still pass. */
   const requeue = () => requeueAfterRungChange(gatewayDb, tenantId, settingsOf, clock());
 
@@ -543,18 +558,33 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (;;) {
       await syncDecisions(gatewayDb, tenantId, clock());
       await requeue();
+      // Enquiries queued before there were slots are given one.
+      await assignMissingSlots(gatewayDb, tenantId, clock(), async (businessId) => (await settingsOf(businessId)).enquiry_slots);
       if (await breakerToday(gatewayDb, tenantId, clock())) return;
-      const next = await gatewayDb.tx(tenantId, async (tx) =>
-        (await tx.query(
-          `select e.enquiry_id, e.approval_id, e.business_id, e.prospect_id, e.status, e.to_address, e.subject, e.body, e.service, p.business_type, t.timezone
-             from enquiries e join prospects p on p.prospect_id = e.prospect_id join tenants t on t.tenant_id = e.tenant_id
-            where (e.status = 'approved' and e.approval_id is not null) or e.status = 'queued'
-            order by coalesce(e.decided_at, e.proposed_at), e.enquiry_id limit 1`,
-        )).rows[0]);
-      if (!next) return;
-      const settings = await settingsOf(next.business_id);
-      // Nothing goes out at night, at the weekend or on a day set aside. It waits for the hours to open.
-      if (!withinSendingHours(clock(), next.timezone as string, settings)) return;
+      // Which part of the week is it? In hours, a weekday evening, the weekend, or none (the small hours, an early
+      // morning, a day set aside), when nothing is sent. The slots are the same for every floor of a tenant, so the
+      // first floor's settings that say it is some slot decide.
+      const floors = await gatewayDb.tx(tenantId, async (tx) =>
+        (await tx.query("select distinct e.business_id, t.timezone from enquiries e join tenants t on t.tenant_id = e.tenant_id where e.status in ('approved', 'queued')")).rows);
+      let next: any = null;
+      let settings = parseOutreachSettings({});
+      let slot: Slot | null = null;
+      for (const floor of floors) {
+        const own = await settingsOf(floor.business_id as string);
+        const now = slotAt(clock(), floor.timezone as string, own);
+        if (!now) continue;
+        // An enquiry a person approved goes in whatever slot is open. One queued to go without asking waits for its own.
+        const row = await gatewayDb.tx(tenantId, async (tx) =>
+          (await tx.query(
+            `select e.enquiry_id, e.approval_id, e.business_id, e.prospect_id, e.status, e.to_address, e.subject, e.body, e.service, p.business_type, p.places, t.timezone
+               from enquiries e join prospects p on p.prospect_id = e.prospect_id join tenants t on t.tenant_id = e.tenant_id
+              where e.business_id = $1 and ((e.status = 'approved' and e.approval_id is not null) or (e.status = 'queued' and e.sent_slot = $2))
+              order by coalesce(e.decided_at, e.proposed_at), e.enquiry_id limit 1`,
+            [floor.business_id, now],
+          )).rows[0]);
+        if (row) { next = row; settings = own; slot = now; break; }
+      }
+      if (!next || !slot) return;
       const statusNow = () => gatewayDb.tx(tenantId, async (tx) => (await tx.query("select status from enquiries where enquiry_id = $1", [next.enquiry_id])).rows[0]?.status as string | undefined);
       const close = (status: "expired" | "rejected", from: string) =>
         gatewayDb.tx(tenantId, (tx) => tx.query("update enquiries set status = $2 where enquiry_id = $1 and status = $3", [next.enquiry_id, status, from]));
@@ -595,6 +625,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         // Still queued after an attempt: the mailbox refused the login, so nothing went and sending has been stopped for the day.
         if ((await statusNow()) === "queued") return;
       }
+      // Sent: record which slot it went in, whether they were open by the hours Google shows, when they next open, and
+      // the earliest it may be scored. The score, the card and the comparison with rivals all read these.
+      if ((await statusNow()) === "sent") await recordSend(next, slot, settings);
       if (await checkFailures(gatewayDb, tenantId, next.business_id, settings.enquiry_max_failures_a_day, clock())) return;
       if (settings.enquiry_send_gap_seconds > 0) await pause(settings.enquiry_send_gap_seconds * 1000);
     }

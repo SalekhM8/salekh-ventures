@@ -133,6 +133,17 @@ export interface CaptureInput {
     /** null: the reply could not be assessed. */
     quality: { answered: boolean; nextStep: boolean } | null;
     followUps: number;
+    /**
+     * Set when the enquiry was sent while the business was shut. Then what is scored is whether anything USEFUL came
+     * back, and how soon against when they next opened: a person, or an automatic reply that answered the question
+     * or offered a booking. `band` null: nothing useful came at all.
+     */
+    outOfHours?: {
+      band: "useful_within_15_minutes" | "useful_the_same_evening" | "within_the_first_working_hour" | "later_that_working_day" | "the_next_day" | null;
+      /** What the useful reply was. */
+      from: "a person" | "an automatic reply that answered the question or offered a booking" | null;
+      minutes: number | null;
+    };
   };
   /** Kinds of enquiry route the business publishes. null: not analysed. */
   routeKinds: string[] | null;
@@ -172,8 +183,17 @@ export function captureScore(input: CaptureInput, settings: OutreachSettings): C
     const m = e.minutesToReply;
     const ack = e.automaticAcknowledgement ? " An automatic acknowledgement was received, which is not counted as a reply." : "";
     const limit = settings.reply_wait_hours * 60;
-    const [points, note] =
-      m === null || m > Math.max(limit, 24 * 60) ? [0, `no reply from a person within ${settings.reply_wait_hours} hours`] :
+    const clock = m === null ? "No person replied in the time allowed" : `Clock time to a person's reply: ${sayMinutes(m)}`;
+    const o = e.outOfHours;
+    const OOH: Record<NonNullable<NonNullable<typeof o>["band"]>, string> = {
+      useful_within_15_minutes: "within 15 minutes", useful_the_same_evening: "the same day, while they were still shut", within_the_first_working_hour: "by the end of their first hour open",
+      later_that_working_day: "later on the day they next opened", the_next_day: "the day after they next opened",
+    };
+    const [points, note] = o
+      // Sent while they were shut. Both things are said: what useful came back and when, and the clock time to a person.
+      ? [o.band === null ? 0 : w.out_of_hours[o.band],
+         `sent while they were shut. ${o.band === null ? "Nothing useful came back in the time allowed" : `Something useful came back ${OOH[o.band]} (${o.from}${o.minutes === null ? "" : `, ${sayMinutes(o.minutes)} after it was sent`})`}. ${clock}`]
+      : m === null || m > Math.max(limit, 24 * 60) ? [0, `no reply from a person within ${settings.reply_wait_hours} hours`] :
       m <= 15 ? [w.within_15_minutes, `a person replied in ${sayMinutes(m)}`] :
       m <= 60 ? [w.within_1_hour, `a person replied in ${sayMinutes(m)}`] :
       m <= 240 ? [w.within_4_hours, `a person replied in ${sayMinutes(m)}`] :
@@ -235,19 +255,24 @@ const percent = (n: number): string => `${Math.round(n * 100)}%`;
  */
 export function estimateLeak(
   price: { amount: number; source_url: string } | null,
-  enquiry: { minutesToReply: number | null } | null,
+  enquiry: { minutesToReply: number | null; /** Sent while they were shut. `useful`: something useful came back before or as they opened. */ outOfHours?: { useful: boolean } } | null,
   settings: OutreachSettings,
 ): Leak {
   if (!enquiry) return { estimated: false, why: "no enquiry has been tested, so there is nothing to base an estimate on" };
   if (!price || !(price.amount > 0)) return { estimated: false, why: "the business does not publish a price for its highest value service, so no estimate can be made" };
-  if (enquiry.minutesToReply !== null && enquiry.minutesToReply <= 240) return { estimated: false, why: "a person replied within four hours, so no leak is estimated from reply speed" };
   const a = settings.leak_assumptions;
-  const low = price.amount * a.enquiries_a_month.low * a.share_lost_to_a_slow_reply.low * a.share_that_would_have_bought.low;
-  const high = price.amount * a.enquiries_a_month.high * a.share_lost_to_a_slow_reply.high * a.share_that_would_have_bought.high;
+  const ooh = enquiry.outOfHours;
+  if (ooh?.useful) return { estimated: false, why: "something useful came back while they were shut or as they opened, so no leak is estimated from this test" };
+  if (!ooh && enquiry.minutesToReply !== null && enquiry.minutesToReply <= 240) return { estimated: false, why: "a person replied within four hours, so no leak is estimated from reply speed" };
+  // A test sent out of hours speaks only for the enquiries that arrive out of hours: one more assumption, said as one.
+  const share = ooh ? a.share_arriving_out_of_hours : { low: 1, high: 1 };
+  const low = price.amount * a.enquiries_a_month.low * share.low * a.share_lost_to_a_slow_reply.low * a.share_that_would_have_bought.low;
+  const high = price.amount * a.enquiries_a_month.high * share.high * a.share_lost_to_a_slow_reply.high * a.share_that_would_have_bought.high;
   return {
     estimated: true, low: Math.round(low), high: Math.round(high),
     workings:
       `${pounds(price.amount)} (their published price, source: ${price.source_url}) × ${a.enquiries_a_month.low} to ${a.enquiries_a_month.high} enquiries a month (ASSUMPTION) ` +
+      (ooh ? `× ${percent(share.low)} to ${percent(share.high)} arriving out of hours (ASSUMPTION; this test was sent out of hours) ` : "") +
       `× ${percent(a.share_lost_to_a_slow_reply.low)} to ${percent(a.share_lost_to_a_slow_reply.high)} lost to a slow or missing reply (ASSUMPTION) ` +
       `× ${percent(a.share_that_would_have_bought.low)} to ${percent(a.share_that_would_have_bought.high)} that would have bought (ASSUMPTION) = ${pounds(low)} to ${pounds(high)} a month`,
   };
@@ -272,6 +297,14 @@ export interface TestResult {
   sent_at: string;
   replies: StoredReply[];
   opted_out?: boolean;
+  /** Which part of the week it was sent in. */
+  slot?: Slot;
+  /** Whether the business was open when it was sent, by the hours Google shows. "unknown": none were shown. */
+  opening_state?: "open" | "closed" | "unknown";
+  /** When they next opened after it was sent. Absent when it was sent while they were open. */
+  next_opening?: string;
+  /** The earliest it may be scored. */
+  score_after?: string;
 }
 
 
@@ -284,9 +317,11 @@ export function captureFor(test: TestResult | null, routeKinds: string[] | null,
   const day = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
   return captureScore({
     enquiry: {
+      ...(sentOutOfHours(test) ? { outOfHours: usefulOutOfHours(test, timezone) } : {}),
       minutesToReply: first ? (new Date(first.received_at).getTime() - sent.getTime()) / 60000 : null,
       sameDay: first ? day(new Date(first.received_at)) === day(sent) : false,
-      automaticAcknowledgement: test.replies.some((r) => r.kind === "automatic"),
+      // A bare acknowledgement. An automatic reply that answered the question or offered a booking is not one.
+      automaticAcknowledgement: test.replies.some((r) => r.kind === "automatic" && r.answered?.value !== true && r.next_step?.value !== true),
       quality: first ? (first.answered && first.next_step ? { answered: first.answered.value, nextStep: first.next_step.value } : null) : null,
       followUps: Math.max(0, people.length - 1),
     },
@@ -329,12 +364,108 @@ export function isBounce(from: string, subject: string): boolean {
 
 // ---- when an enquiry may be sent ----------------------------------------------------------
 
-/** Is this moment inside the sending hours, on a sending day, and not a day set aside? All in the tenant's own time zone. */
-export function withinSendingHours(when: Date, timezone: string, settings: Pick<OutreachSettings, "enquiry_send_days" | "enquiry_send_from" | "enquiry_send_until" | "enquiry_no_send_dates">): boolean {
+export type Slot = "in_hours" | "evening" | "weekend";
+export const SLOTS: readonly Slot[] = ["in_hours", "evening", "weekend"];
+export const SLOT_NAME: Record<Slot, string> = { in_hours: "in working hours", evening: "on a weekday evening", weekend: "at the weekend" };
+
+type Hours = Pick<OutreachSettings, "enquiry_send_days" | "enquiry_send_from" | "enquiry_send_until" | "enquiry_no_send_dates" | "working_days" | "working_hours_from" | "working_hours_until" | "non_working_dates">;
+
+/** A moment as the tenant's own clock shows it. */
+function local(when: Date, timezone: string): { day: number; date: string; time: string } {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(when);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(get("weekday")) + 1;
-  const date = `${get("year")}-${get("month")}-${get("day")}`;
-  const time = `${get("hour")}:${get("minute")}`;
-  return settings.enquiry_send_days.includes(day) && !settings.enquiry_no_send_dates.includes(date) && time >= settings.enquiry_send_from && time < settings.enquiry_send_until;
+  return { day: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(get("weekday")) + 1, date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
 }
+
+const isWorkingDay = (l: { day: number; date: string }, settings: Hours) => settings.working_days.includes(l.day) && !settings.non_working_dates.includes(l.date);
+
+/** Is this moment inside the sending hours, on a sending day, and not a day set aside? All in the tenant's own time zone. */
+export function withinSendingHours(when: Date, timezone: string, settings: Hours): boolean {
+  const l = local(when, timezone);
+  return settings.enquiry_send_days.includes(l.day) && !settings.enquiry_no_send_dates.includes(l.date) && l.time >= settings.enquiry_send_from && l.time < settings.enquiry_send_until;
+}
+
+/**
+ * Which slot this moment falls in, or null when nothing is sent now (the small hours, an early weekday morning, a
+ * weekend evening, a day set aside).
+ */
+export function slotAt(when: Date, timezone: string, settings: Hours): Slot | null {
+  if (!withinSendingHours(when, timezone, settings)) return null;
+  const l = local(when, timezone);
+  const inDay = l.time >= settings.working_hours_from && l.time < settings.working_hours_until;
+  if (isWorkingDay(l, settings)) return inDay ? "in_hours" : l.time >= settings.working_hours_until ? "evening" : null;
+  return inDay ? "weekend" : null;
+}
+
+/** Is this a moment in the working day, by the settings (used when a business shows no opening hours of its own)? */
+function inWorkingHours(when: Date, timezone: string, settings: Hours): boolean {
+  const l = local(when, timezone);
+  return isWorkingDay(l, settings) && l.time >= settings.working_hours_from && l.time < settings.working_hours_until;
+}
+
+const STEP_MS = 15 * 60 * 1000;
+
+/** When a business next opens after a moment: by the hours Google shows for it when there are any, otherwise by the working day in the settings. */
+export function nextOpening(after: Date, timezone: string, periods: Parameters<typeof openAt>[0] | null, settings: Hours): Date | null {
+  const isOpen = (t: Date) => (periods && periods.length > 0 ? openAt(periods, t, timezone) : inWorkingHours(t, timezone, settings));
+  // Looked for a quarter of an hour at a time, from the next quarter hour, for up to ten days.
+  let t = new Date(Math.ceil((after.getTime() + 1) / STEP_MS) * STEP_MS);
+  for (let i = 0; i < 10 * 24 * 4; i += 1, t = new Date(t.getTime() + STEP_MS)) if (isOpen(t)) return t;
+  return null;
+}
+
+/** The end of the next working day strictly after a moment's own day. */
+function endOfNextWorkingDay(after: Date, timezone: string, settings: Hours): Date | null {
+  const start = local(after, timezone).date;
+  let t = new Date(Math.ceil((after.getTime() + 1) / STEP_MS) * STEP_MS);
+  let last: Date | null = null;
+  for (let i = 0; i < 10 * 24 * 4; i += 1, t = new Date(t.getTime() + STEP_MS)) {
+    const l = local(t, timezone);
+    if (l.date === start) continue;
+    if (inWorkingHours(t, timezone, settings)) last = t;
+    else if (last) return new Date(last.getTime() + STEP_MS);
+  }
+  return null;
+}
+
+/**
+ * The earliest an enquiry may be scored: 24 hours (the setting) after it was sent, or, for one sent in the evening
+ * or at the weekend, the end of the next working day if that is later. A business cannot be marked down for not
+ * answering before it has had a working day to.
+ */
+export function scoreAfter(sent: Date, slot: Slot | null, timezone: string, settings: Hours & Pick<OutreachSettings, "reply_wait_hours">): Date {
+  const plain = new Date(sent.getTime() + settings.reply_wait_hours * 60 * 60 * 1000);
+  if (slot !== "evening" && slot !== "weekend") return plain;
+  const end = endOfNextWorkingDay(sent, timezone, settings);
+  return end && end.getTime() > plain.getTime() ? end : plain;
+}
+
+/** Was this enquiry sent while the business was shut? By its own hours when Google showed any, otherwise by the slot. */
+export function sentOutOfHours(test: Pick<TestResult, "slot" | "opening_state">): boolean {
+  if (test.opening_state === "closed") return true;
+  if (test.opening_state === "open") return false;
+  return test.slot === "evening" || test.slot === "weekend";
+}
+
+/** For an enquiry sent out of hours: the first useful thing that came back, and where it falls against when they next opened. */
+export function usefulOutOfHours(test: TestResult, timezone: string): NonNullable<NonNullable<CaptureInput["enquiry"]>["outOfHours"]> {
+  const sent = new Date(test.sent_at).getTime();
+  const useful = test.replies
+    .filter((r) => r.kind === "person" || (r.kind === "automatic" && (r.answered?.value === true || r.next_step?.value === true)))
+    .sort((a, b) => a.received_at.localeCompare(b.received_at))[0];
+  if (!useful) return { band: null, from: null, minutes: null };
+  const at = new Date(useful.received_at).getTime();
+  const minutes = (at - sent) / 60000;
+  const from = useful.kind === "person" ? ("a person" as const) : ("an automatic reply that answered the question or offered a booking" as const);
+  // With no record of when they next opened, the moment of sending stands in for it.
+  const opened = test.next_opening ? new Date(test.next_opening).getTime() : sent;
+  const sameDay = (a: number, b: number) => local(new Date(a), timezone).date === local(new Date(b), timezone).date;
+  const band =
+    minutes <= 15 ? "useful_within_15_minutes" :
+    at < opened && sameDay(at, sent) ? "useful_the_same_evening" :
+    at <= opened + 60 * 60 * 1000 ? "within_the_first_working_hour" :
+    sameDay(at, opened) ? "later_that_working_day" :
+    at <= opened + 36 * 60 * 60 * 1000 ? "the_next_day" : null;
+  return band === null ? { band: null, from: null, minutes: null } : { band, from, minutes };
+}
+

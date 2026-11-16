@@ -103,14 +103,14 @@ test("bootstrap: two instances starting together set the database up once; a sec
   // ---- the first boot, by two instances at the same moment ----
   const [one, two] = await Promise.all([boot({ carried: parseCarriedConfig(encode(blob())) }), boot({ carried: parseCarriedConfig(encode(blob())) })]);
   assert.deepEqual([one.tenantId, two.tenantId], [TENANT, TENANT], "the tenant has the id that was given, so it matches the developer's machine");
-  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [12, 1], "each migration applied once; one of the two was the first boot");
+  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [13, 1], "each migration applied once; one of the two was the first boot");
   assert.deepEqual(one.roles, [`${PREFIX}_agent`, `${PREFIX}_gateway`, `${PREFIX}_ui`]);
   const counts = async () => (await bootRows(
     `select (select count(*)::int from tenants) as tenants, (select count(*)::int from businesses) as floors, (select count(*)::int from members) as members,
             (select count(*)::int from config_versions) as config, (select count(*)::int from suppressions) as suppressions, (select count(*)::int from schema_migrations) as migrations,
             (select count(*)::int from prospects) as prospects, (select count(*)::int from approvals) as approvals`))[0];
   const first = await counts();
-  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 12, 0, 0]);
+  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 13, 0, 0]);
   assert.deepEqual(await bootRows("select slug, timezone from tenants"), [{ slug: "fixture-boot", timezone: "Europe/London" }]);
 
   // what was carried is in force, as version 1, and says where it came from
@@ -167,6 +167,39 @@ test("bootstrap: two instances starting together set the database up once; a sec
   assert.deepEqual((await rungRows()).map((r) => r.value.rung), [2, 3, 2]);
   const afterRung = await counts();
   assert.deepEqual({ ...afterRung, config: 0 }, { ...first, config: 0 });
+
+  // ---- the owner's settings patch: applied once, checked like any settings, refused whole when any of it is wrong ----
+  const settingRows = () => bootRows("select c.key, c.value, c.version, c.changed_by_kind, c.reason from config_versions c join businesses b using (business_id) where c.tenant_id = $1 and b.slug = 'salekh-ventures' and c.kind = 'setting' order by c.key, c.version", [TENANT]);
+  const patch = { non_working_dates: ["2026-12-25", "2026-12-28"], enquiry_send_until: "21:00", capture_weights: { followed_up: 5 }, business_types: [{ id: "trades", leak_assumptions: { enquiries_a_month: { low: 5, high: 15 } } }] };
+  const beforePatch = await settingRows();
+  const patched = await boot({ settingsPatch: encode(patch) });
+  assert.equal(patched.patchApplied, 1);
+  const afterPatch = await settingRows();
+  const outreachNow = afterPatch.filter((r) => r.key === "outreach").at(-1);
+  assert.deepEqual([afterPatch.length - beforePatch.length, outreachNow.changed_by_kind, outreachNow.reason, outreachNow.value.non_working_dates, outreachNow.value.enquiry_send_until, outreachNow.value.enquiry_send_from],
+    [2, "member", "set by the owner through the server's settings", ["2026-12-25", "2026-12-28"], "21:00", "07:00"], "a new version in the owner's name, and a note of the patch's hash");
+  // only what the patch names has moved: a nested value, and one kind's assumption, with everything beside them left alone
+  assert.deepEqual([outreachNow.value.capture_weights.followed_up, outreachNow.value.capture_weights.within_15_minutes], [5, 50]);
+  const tradesNow = outreachNow.value.business_types.find((t) => t.id === "trades");
+  assert.deepEqual([tradesNow.leak_assumptions.enquiries_a_month, tradesNow.leak_assumptions.share_lost_to_a_slow_reply, tradesNow.search_phrases.length, outreachNow.value.business_types.length, outreachNow.value.areas],
+    [{ low: 5, high: 15 }, { low: 0.1, high: 0.3 }, 5, 6, ["Carriedton", "Carriedham"]]);
+  assert.match(afterPatch.filter((r) => r.key === "outreach.patch").at(-1).value.sha256, /^[0-9a-f]{64}$/);
+  // a restart with the same patch applies nothing; so does one with the same patch written with its keys in another order
+  assert.equal((await boot({ settingsPatch: encode(patch) })).patchApplied, 0);
+  assert.equal((await boot({ settingsPatch: encode({ enquiry_send_until: "21:00", business_types: patch.business_types, capture_weights: { followed_up: 5 }, non_working_dates: patch.non_working_dates }) })).patchApplied, 0);
+  assert.equal((await settingRows()).length, afterPatch.length, "not one row more");
+  // a different patch is applied
+  assert.equal((await boot({ settingsPatch: encode({ enquiry_send_until: "21:30" }) })).patchApplied, 1);
+  assert.equal((await settingRows()).filter((r) => r.key === "outreach").at(-1).value.enquiry_send_until, "21:30");
+  // anything wrong in it stops the start, and nothing of it is applied
+  const settled = await settingRows();
+  for (const [bad, why] of [
+    [{ rung: 3 }, /not valid/], [{ enquiry_rung: 3 }, /not valid/], [{ enquiries_per_day: 500 }, /not valid/], [{ surprise: true }, /not valid/],
+    [{ enquiry_send_until: "25:00" }, /not valid/], [{ max_places_calls_per_run: 99999 }, /not valid/], [{ enquiry_send_until: "20:00", capture_weights: { surprise: 1 } }, /not valid/],
+    [{ business_types: [{ id: "online-shops" }] }, /not valid/], [{ business_types: "all" }, /must be a list/], [[1, 2], /must be a JSON object/],
+  ]) await assert.rejects(boot({ settingsPatch: encode(bad) }), why, JSON.stringify(bad));
+  await assert.rejects(boot({ settingsPatch: "%%% not base64 json" }), /not base64 JSON/);
+  assert.deepEqual(await settingRows(), settled, "a refused patch changed nothing, not even the part of it that was valid");
 
   // the same slug under another id is refused, not quietly made into a second tenant
   await assert.rejects(boot({ tenantId: "11111111-2222-4333-8444-555555555555" }), /another id/);
@@ -391,7 +424,7 @@ test("with no search tool installed the connector is 'not configured' for every 
     throw new Error(`fixture: no model call was expected at ${request.stage}`);
   });
   const mailbox = { address: "fixture-test-mailbox@example.test", send: async () => ({ messageId: "<x@fixture>" }), sentContains: async () => true, findReplies: async () => [] };
-  const settings = { area: "Fixtureshire", areas: ["Fixtureton"], areas_per_run: 1, min_seconds_between_fetches: 0 };
+  const settings = { area: "Fixtureshire", areas: ["Fixtureton"], areas_per_run: 1, min_seconds_between_fetches: 0, business_types: [{ id: "clinics" }], enquiry_slots: ["in_hours"] };
   const x = await makeHouse(h, { outreach: { budget: 5, settings }, model, reach: null, places: { searchText: async () => ({ places: [place("kappa"), place("sigma")], nextPageToken: null }) }, directReader: reader, mailbox, server: false, sleep: async () => {} });
   open.push(x);
   await control.setConfig(h.uiDb, { tenantId: x.w.tenantId, businessId: x.w.businessId, kind: "cap", key: ENQUIRY_CAP, value: { limit: 30 }, memberId: x.w.ownerId, reason: "test fixture" });

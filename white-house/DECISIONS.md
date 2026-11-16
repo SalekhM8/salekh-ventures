@@ -829,3 +829,45 @@ Each shortlist opens with how many were sent without asking since the last was w
 - Sending runs behind a run, so a shortlist is written before that run's enquiries have gone: they are told of on the next one, and a breaker tripped by them opens the next one.
 - The complaint detection is a list of phrases plus the reply reader's own judgement. A complaint worded unlike any of them would not trip it.
 
+## Evenings and weekends: sending slots and out-of-hours scoring, 17 Nov 2026
+
+Salekh's correction: keeping test enquiries to working hours hid the thing he sells against. People enquire in the evening and at weekends, and a business that leaves those until the next afternoon is losing money. S3's "working days, 09:00 to 17:30" is replaced.
+
+### W1. Sending every day, in three slots
+
+Enquiries may go every day from 07:00 to 21:30 in the tenant's zone (settings), never in the small hours. The week is divided into three slots: `in_hours` (a working day, 09:00 to 17:30), `evening` (a working day, 17:30 until sending stops) and `weekend` (any other day, 09:00 to 17:30). An early weekday morning and a weekend evening belong to no slot. Each enquiry queued to send without asking is given the slot its kind of business has been tested in least over the last fortnight, so every kind is spread evenly across all three, and it waits for that slot (a weekend one drafted on Monday goes on Saturday). The slot is stored on the enquiry (`sent_slot`), with whether the business was open at the moment of sending by the hours Google shows (`opening_state`: open, closed, or unknown when Places gave none). Enquiries queued before there were slots are given one on the next round. `enquiry_slots` says which slots are in use. An enquiry a person approved (rung 2) goes in whichever slot is open.
+
+`non_working_dates` (bank holidays: treated as a weekend day) and `enquiry_no_send_dates` (nothing sent at all) are both **seeded empty: the build knows no bank holidays and does not invent them.**
+
+### W2. Out-of-hours scoring
+
+"Sent while they were shut" means closed by Google's hours for that business, or, where there are none, sent in the evening or weekend slot. For such an enquiry the reply-speed part scores whether anything USEFUL came back and how soon against when they next opened: a person, or an automatic reply that answered the question or offered a booking. Bands: useful within 15 minutes 50; the same day while still shut 42; by the end of their first hour open (which includes anything useful sent in the night) 32; later the day they next opened 22; the day after (within 36 hours of opening) 12; nothing 0. A bare acknowledgement is noted and scores nothing. Automatic replies are therefore now read by the cheap model too, for whether they answered or offered a next step, with the same rule that a "yes" needs a sentence really in the reply. The note says both things: what useful came back and when, and the clock time to a person's reply. Sent while they were open, the working-hours bands apply unchanged, whatever the day.
+
+When they next open is taken from Google's hours for the business, or from the working day in the settings when there are none, and is fixed at the moment of sending.
+
+### W3. When it may be scored
+
+24 hours after sending, or the end of the next working day for an evening or weekend send, whichever is later. Fixed at sending and stored with the test.
+
+### W4. Rivals, same slot only
+
+A rival proposed for a low scorer is queued for the same slot as that prospect's enquiry. On the card, a competitor tested in another slot is shown as "tested in working hours: not compared" and is never used in the line about who replied faster. The card says when the enquiry was sent in the tenant's own time and whether they were open: "Sent Tuesday 19:42, when they were closed".
+
+### W5. The leak for an out-of-hours test
+
+One more assumption per kind, `share_arriving_out_of_hours` (placeholder 30% to 50%, from no source). It is used only for a test sent while they were shut, and the workings say so. If something useful came back, no leak is estimated from that test.
+
+### W6. Every kind, every run
+
+A run searches one place for every kind that is switched on (the place that kind searched longest ago), then, if `areas_per_run` allows more, the pairs searched longest ago. The default limit on Places calls is 40, and calls are reported by kind. The day's enquiry allowance is shared evenly across kinds, one from each in turn, so a kind with fewer ready passes its share on.
+
+### W7. The owner's settings on a server with no shell
+
+`WH_OUTREACH_SETTINGS_PATCH` is base64 of a JSON object holding only what is to change. Objects are merged key by key, lists replace, and `business_types` is merged kind by kind. The result must pass the settings' own checks (an unknown key, a value past its limit, or anything that is not a setting stops the start, and nothing of the patch is applied). It is written as a new version in the owner's name. Its hash is kept, and a start that finds the same hash applies nothing. Rungs stay with `WH_ENQUIRY_RUNG`. If `WH_OUTREACH_ENABLED_TYPES` is also set it is applied first, on every start, so do not switch kinds in both.
+
+### Worth knowing
+
+- A weekend enquiry can wait up to six days for its slot. With three slots a third of each day's enquiries go that day in working hours, a third that evening, and a third on the next weekend day.
+- Results sent before this change have no slot: they are scored and compared as before.
+- "The same day while still shut" is by the calendar day in the tenant's zone.
+

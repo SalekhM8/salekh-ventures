@@ -9,6 +9,8 @@ An enquiry was sent to a business by email, and something came back. You are giv
 - **Answered the question?** True only if the reply gives what was asked for: a price (or a clear price range), or when an appointment or consultation is available. "Please call us to discuss" is not an answer.
 - **Offered a next step?** True only if it offers a way forward: a time, a call back, a consultation, a way to book.
 
+Answer the last two for an automatic reply as well. An automatic reply that gives the price, or a link or a way to book, has answered or offered a next step, and that matters to someone who wrote at night. One that only says the message was received has done neither.
+
 ## Rules
 
 - For each "true", quote the exact sentence from the reply that you rely on. If you cannot quote one, the answer is not true.

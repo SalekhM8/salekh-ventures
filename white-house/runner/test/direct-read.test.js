@@ -320,7 +320,7 @@ test("a full run with web search and web read both rate limited: the backlog is 
   const sent = [];
   const mailbox = { address: "fixture-test-mailbox@example.test", send: async (m) => { sent.push(m); return { messageId: "<x@fixture>" }; }, sentContains: async () => true, findReplies: async () => [] };
   const x = await makeHouse(h, {
-    outreach: { budget: 5, settings: { area: "Fixtureshire", areas: ["Fixtureton"], areas_per_run: 1, front_desk_roles: ["receptionist"], min_seconds_between_fetches: 0 } },
+    outreach: { budget: 5, settings: { area: "Fixtureshire", areas: ["Fixtureton"], areas_per_run: 1, front_desk_roles: ["receptionist"], min_seconds_between_fetches: 0, business_types: [{ id: "clinics" }], enquiry_slots: ["in_hours"] } },
     model, reach, mailbox, places, directReader: reader, server: false, sleep: async () => {},
   });
   open.push(x);

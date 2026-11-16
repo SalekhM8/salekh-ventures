@@ -3,7 +3,7 @@ import pg from "pg";
 import { z } from "zod";
 import { actionTypes } from "./control/action-types.js";
 import { isUuid } from "./control/db.js";
-import { canonicalJson } from "./control/hash.js";
+import { canonicalJson, hashPayload } from "./control/hash.js";
 import { defaultMigrationsDir, migrate } from "./migrate.js";
 import { parseOutreachSettings, toStoredForm } from "./outreach/settings.js";
 import { seed, type CarriedConfig } from "./seed.js";
@@ -98,6 +98,89 @@ export interface BootstrapOptions {
    * from what is in force. Anything but 2 or 3, or anything past the action's ceiling, stops the start.
    */
   enquiryRung?: number | null;
+  /**
+   * The owner's changes to the outreach settings, on a server with no shell: base64 of a JSON object holding only
+   * what is to change. Checked by the same rules as the settings themselves and applied once: its hash is kept,
+   * and a start that finds the same hash does nothing.
+   */
+  settingsPatch?: string | null;
+}
+
+export const PATCH_REASON = "set by the owner through the server's settings";
+const PATCH_KEY = "outreach.patch";
+
+/** Lay `patch` over `base`. Objects are merged key by key; anything else, a list included, replaces what was there. */
+function merge(base: unknown, patch: unknown): unknown {
+  const plain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+  if (!plain(base) || !plain(patch)) return patch;
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) out[key] = merge(base[key], value);
+  return out;
+}
+
+/**
+ * Apply WH_OUTREACH_SETTINGS_PATCH to every floor's outreach settings, as a new version in the owner's name.
+ * `business_types` is merged kind by kind (by id), so one kind's assumptions can be changed without restating the
+ * rest; a kind that is not already there must be given in full. The result must pass the settings' own checks:
+ * an unknown key, a value past its limit, or anything that is not a setting (a rung, a cap, a budget) stops the start.
+ */
+async function applySettingsPatch(client: pg.Client, tenantId: string, base64: string): Promise<number> {
+  let patch: unknown;
+  try {
+    patch = JSON.parse(Buffer.from(base64.trim(), "base64").toString("utf8"));
+  } catch {
+    throw new Error("WH_OUTREACH_SETTINGS_PATCH is not base64 JSON");
+  }
+  if (typeof patch !== "object" || patch === null || Array.isArray(patch)) throw new Error("WH_OUTREACH_SETTINGS_PATCH must be a JSON object");
+  const hash = hashPayload(patch as Record<string, unknown>);
+  const owner = (await client.query("select member_id from members where tenant_id = $1 and role = 'owner' and status = 'active' order by created_at limit 1", [tenantId])).rows[0];
+  if (!owner) throw new Error("the tenant has no active owner to change the settings in the name of");
+  const rows = (await client.query(
+    `select distinct on (business_id) business_id, value, version from config_versions
+      where tenant_id = $1 and kind = 'setting' and key = 'outreach' order by business_id, version desc`,
+    [tenantId],
+  )).rows;
+  let applied = 0;
+  for (const row of rows) {
+    const last = (await client.query(
+      "select value, version from config_versions where tenant_id = $1 and business_id = $2 and kind = 'setting' and key = $3 order by version desc limit 1",
+      [tenantId, row.business_id, PATCH_KEY],
+    )).rows[0];
+    if (last?.value?.sha256 === hash) continue; // this very patch has been applied before: a restart does not apply it again
+    const current = toStoredForm(parseOutreachSettings(row.value)) as Record<string, unknown>;
+    const { business_types: kinds, ...rest } = patch as { business_types?: unknown } & Record<string, unknown>;
+    const next = merge(current, rest) as Record<string, unknown>;
+    if (kinds !== undefined) {
+      if (!Array.isArray(kinds)) throw new Error("WH_OUTREACH_SETTINGS_PATCH is not valid: business_types must be a list");
+      const list = (current.business_types as { id: string }[]).map((t) => ({ ...t }));
+      for (const entry of kinds as { id?: unknown }[]) {
+        const at = list.findIndex((t) => t.id === entry?.id);
+        if (at >= 0) list[at] = merge(list[at], entry) as { id: string };
+        else list.push(entry as { id: string });
+      }
+      next.business_types = list;
+    }
+    let checked: Record<string, unknown>;
+    try {
+      checked = toStoredForm(parseOutreachSettings(next)) as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(`WH_OUTREACH_SETTINGS_PATCH is not valid: ${err instanceof Error ? err.message : "it does not pass the settings' checks"}`);
+    }
+    if (canonicalJson(checked) !== canonicalJson(row.value)) {
+      await client.query(
+        `insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, changed_by_member, reason)
+         values ($1, $2, 'setting', 'outreach', $3::jsonb, $4, 'member', $5, $6)`,
+        [tenantId, row.business_id, JSON.stringify(checked), Number(row.version) + 1, owner.member_id, PATCH_REASON],
+      );
+    }
+    await client.query(
+      `insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, reason)
+       values ($1, $2, 'setting', $3, $4::jsonb, $5, 'system', 'the hash of the last settings patch applied, so it is not applied twice')`,
+      [tenantId, row.business_id, PATCH_KEY, JSON.stringify({ sha256: hash }), Number(last?.version ?? 0) + 1],
+    );
+    applied += 1;
+  }
+  return applied;
 }
 
 export const RUNG_REASON = "set by the owner through the server's settings";
@@ -138,6 +221,8 @@ export interface BootstrapResult {
   settingsUpdated: number;
   /** Rooms whose rung for test enquiries was changed by WH_ENQUIRY_RUNG on this start. */
   rungChanged: number;
+  /** Rooms the settings patch was applied to on this start. 0 when there was none, or it had been applied before. */
+  patchApplied: number;
 }
 
 /**
@@ -222,8 +307,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       ownerName: options.ownerName, ownerEmail: options.ownerEmail, ...(carried ? { carried } : {}),
     });
     const settingsUpdated = await bringOutreachSettingsUpToDate(client, seeded.tenantId, options.enabledTypes ?? null);
+    const patchApplied = options.settingsPatch ? await applySettingsPatch(client, seeded.tenantId, options.settingsPatch) : 0;
     const rungChanged = options.enquiryRung === undefined || options.enquiryRung === null ? 0 : await setEnquiryRung(client, seeded.tenantId, options.enquiryRung);
-    return { migrationsApplied, roles, tenantId: seeded.tenantId, firstBoot, carriedApplied: carried !== undefined, settingsUpdated, rungChanged };
+    return { migrationsApplied, roles, tenantId: seeded.tenantId, firstBoot, carriedApplied: carried !== undefined, settingsUpdated, rungChanged, patchApplied };
   } finally {
     await client.end().catch(() => undefined);
   }
@@ -234,7 +320,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 type Env = Record<string, string | undefined>;
 
 /** Variables that hold the database owner's way in. The server process and everything it starts must not have them. */
-export const ADMIN_ONLY_ENV = ["DATABASE_URL_ADMIN", "WH_BOOTSTRAP_CONFIG", "DATABASE_URL", "DATABASE_PUBLIC_URL", "DATABASE_PRIVATE_URL", "PGPASSWORD", "POSTGRES_PASSWORD", "PGUSER", "POSTGRES_USER"] as const;
+export const ADMIN_ONLY_ENV = ["DATABASE_URL_ADMIN", "WH_BOOTSTRAP_CONFIG", "WH_OUTREACH_SETTINGS_PATCH", "DATABASE_URL", "DATABASE_PUBLIC_URL", "DATABASE_PRIVATE_URL", "PGPASSWORD", "POSTGRES_PASSWORD", "PGUSER", "POSTGRES_USER"] as const;
 
 /**
  * The three connection URLs the server uses. Given outright (DATABASE_URL_GATEWAY and so on) they are used as
@@ -273,6 +359,7 @@ export async function bootstrapFromEnv(env: Env, log: (line: string) => void = c
       tenantId: env.WH_TENANT_ID as string, tenantSlug: env.WH_TENANT_SLUG ?? "salekh", tenantName: env.WH_TENANT_NAME ?? "Salekh",
       ownerName: env.WH_OWNER_NAME, ownerEmail: env.WH_OWNER_EMAIL, carried,
       ...(env.MIGRATIONS_DIR ? { migrationsDir: env.MIGRATIONS_DIR } : {}),
+      ...(env.WH_OUTREACH_SETTINGS_PATCH ? { settingsPatch: env.WH_OUTREACH_SETTINGS_PATCH } : {}),
       ...(env.WH_ENQUIRY_RUNG !== undefined && env.WH_ENQUIRY_RUNG !== "" ? { enquiryRung: /^[0-9]$/.test(env.WH_ENQUIRY_RUNG.trim()) ? Number(env.WH_ENQUIRY_RUNG.trim()) : Number.NaN } : {}),
       ...(env.WH_OUTREACH_ENABLED_TYPES ? { enabledTypes: env.WH_OUTREACH_ENABLED_TYPES.split(",").map((id) => id.trim()).filter(Boolean) } : {}),
       // Only for running two houses on one database server (as the tests do). The server leaves it unset.
@@ -280,6 +367,7 @@ export async function bootstrapFromEnv(env: Env, log: (line: string) => void = c
     });
     log(`bootstrap: ${result.migrationsApplied.length} migrations applied, ${result.roles.length} logins set, tenant ready` +
       `${result.firstBoot ? (result.carriedApplied ? ", first boot: carried configuration applied" : ", first boot: defaults only") : ", not the first boot: configuration left as it is"}` +
+      `${result.patchApplied > 0 ? ", the owner's settings patch applied" : ""}` +
       `${result.rungChanged > 0 ? `, test enquiries set to rung ${env.WH_ENQUIRY_RUNG?.trim()} (${env.WH_ENQUIRY_RUNG?.trim() === "3" ? "sent without asking" : "each needs a yes"})` : ""}` +
       `${result.settingsUpdated > 0 ? `, outreach settings written again for ${result.settingsUpdated} ${result.settingsUpdated === 1 ? "room" : "rooms"}` : ""}`);
     return result;

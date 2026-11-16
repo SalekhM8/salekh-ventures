@@ -60,6 +60,8 @@ const leakAssumptions = z
     share_lost_to_a_slow_reply: z.strictObject({ low: z.number().min(0).max(1).default(0.1), high: z.number().min(0).max(1).default(0.3) }).prefault({}),
     /** The share of enquiries that would have gone on to buy. */
     share_that_would_have_bought: z.strictObject({ low: z.number().min(0).max(1).default(0.1), high: z.number().min(0).max(1).default(0.25) }).prefault({}),
+    /** The share of enquiries that arrive outside working hours. Used only for a test that was sent out of hours. */
+    share_arriving_out_of_hours: z.strictObject({ low: z.number().min(0).max(1).default(0.3), high: z.number().min(0).max(1).default(0.5) }).prefault({}),
   })
   .prefault({});
 
@@ -275,7 +277,7 @@ const shape = z.strictObject({
   /** The most searches and page reads one run may make through the search tool. The rest of the run goes on without them. 300 since the tool rate limited a run of 274 followed by another. */
   max_fetches_per_run: z.number().int().min(10).max(5000).default(300),
   /** The most calls to Google Places in one run. Each is billed by Google; see connectors/places.ts for the tier. */
-  max_places_calls_per_run: z.number().int().min(0).max(500).default(20),
+  max_places_calls_per_run: z.number().int().min(0).max(500).default(40),
   /** How far round a low scoring business its nearest rivals are looked for, in metres. */
   rival_search_radius_metres: z.number().int().min(100).max(50_000).default(5000),
   /** The least time between two calls to the search tool, so its own limits are not run into by haste. */
@@ -302,17 +304,32 @@ const shape = z.strictObject({
   enquiry_signoff: z.string().trim().min(1).max(40).default("Salekh"),
   enquiry_max_chars: z.number().int().min(100).max(1500).default(600),
   /**
-   * WHEN ENQUIRIES MAY BE SENT. Only on these days of the week (1 is Monday, 7 is Sunday) and between these times, in
-   * the tenant's time zone, so that nothing goes out at night and "replied the same working day" means something.
-   * Anything ready outside these hours waits for the next time they open.
+   * WHEN ENQUIRIES MAY BE SENT. Every day, between these two times in the tenant's time zone: people enquire in
+   * the evening and at weekends, and how a business treats those is the thing being measured. Never in the
+   * small hours, which no genuine customer does in numbers.
    */
-  enquiry_send_days: z.array(z.number().int().min(1).max(7)).max(7).default([1, 2, 3, 4, 5]),
-  enquiry_send_from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("09:00"),
-  enquiry_send_until: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("17:30"),
+  enquiry_send_days: z.array(z.number().int().min(1).max(7)).max(7).default([1, 2, 3, 4, 5, 6, 7]),
+  enquiry_send_from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("07:00"),
+  enquiry_send_until: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("21:30"),
   /**
-   * Days on which nothing is sent, as YYYY-MM-DD: bank holidays and any other. SEEDED EMPTY ON PURPOSE: the build
-   * does not know England's bank holidays and does not invent them. Salekh adds them.
+   * THE WORKING DAY, for dividing the week into three slots. Each day's enquiries are spread evenly across them,
+   * kind by kind, so every kind of business is tested in each:
+   *   in_hours   a working day, between these two times
+   *   evening    a working day, from the second time until sending stops
+   *   weekend    any other day (and any date in `non_working_dates`), between these two times
+   * (1 is Monday, 7 is Sunday.)
    */
+  /** Which of the three slots are used. Each kind's enquiries are spread evenly across these. */
+  enquiry_slots: z.array(z.enum(["in_hours", "evening", "weekend"])).min(1).max(3).default(["in_hours", "evening", "weekend"]),
+  working_days: z.array(z.number().int().min(1).max(7)).min(1).max(7).default([1, 2, 3, 4, 5]),
+  working_hours_from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("09:00"),
+  working_hours_until: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("17:30"),
+  /**
+   * Bank holidays and other days businesses are shut, as YYYY-MM-DD. They are treated like a weekend day.
+   * SEEDED EMPTY ON PURPOSE: the build does not know England's bank holidays and does not invent them.
+   */
+  non_working_dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(400).default([]),
+  /** Days on which nothing is sent at all, as YYYY-MM-DD. Seeded empty. */
   enquiry_no_send_dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(400).default([]),
   /** More failed sends and bounces than this in one day stop automatic sending until the next day. */
   enquiry_max_failures_a_day: z.number().int().min(0).max(100).default(3),
@@ -342,6 +359,15 @@ const shape = z.strictObject({
       per_kind_of_route: count.default(4),
       route_kinds_counted: count.default(3),
       a_route_that_works_out_of_hours: count.default(8),
+      /**
+       * Reply speed for an enquiry sent when the business was shut. What counts is anything USEFUL coming back: a
+       * person, or an automatic reply that answers the question or offers a booking. A bare "we have received your
+       * message" is noted and scores nothing.
+       */
+      out_of_hours: z.strictObject({
+        useful_within_15_minutes: count.default(50), useful_the_same_evening: count.default(42), within_the_first_working_hour: count.default(32),
+        later_that_working_day: count.default(22), the_next_day: count.default(12),
+      }).prefault({}),
     })
     .prefault({}),
   filters: z

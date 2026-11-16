@@ -19,7 +19,7 @@ import { PLACES_PRICE_TIERS } from "../control/connectors/places.js";
 import type { Gateway } from "../control/gateway.js";
 import { allowanceLeft, breakerToday, collectReplies, emailFor, ENQUIRY_ACTION, enquiryCounts, notTestableReason, proposeEnquiry, requeueAfterRungChange, scoreTested, sentWithoutAsking, syncDecisions, type ReplyCounts, type TestedProspect } from "./enquiries.js";
 import { readRung } from "../control/config.js";
-import { captureFor, estimateLeak, openAt, sayMinutes, serviceFor, type TestResult } from "./enquiry-rules.js";
+import { captureFor, estimateLeak, openAt, sayMinutes, sentOutOfHours, serviceFor, SLOT_NAME, usefulOutOfHours, type Slot, type TestResult } from "./enquiry-rules.js";
 import { bestRoute, leadAgentFor, namedGroup } from "./score.js";
 import { enabledTypes, forType, SIGNAL_MEANING, type OutreachSettings, type Signal } from "./settings.js";
 import { addInto, addTo, analyseBusiness, classifyLeads, draftCard, draftEnquiry, factsFor, noTotals, type Lead, type StageTotals } from "./stages.js";
@@ -252,7 +252,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     // limited company, and who is a director. Nothing about a company or a name stopped the test itself.
     if (ctx.companiesHouse) {
       const timezone = (await db.tx(tenantId, async (tx) => (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone)) as string;
-      const waitingOn = await awaitingCompanyCheck(db, scope(lastRunId), new Date(clock().getTime() - settings.reply_wait_hours * 60 * 60 * 1000));
+      const waitingOn = await awaitingCompanyCheck(db, scope(lastRunId), clock(), settings.reply_wait_hours);
       for (const p of waitingOn) {
         const capture = captureFor(p.testResult as TestResult, [...new Set(p.routes.map((r) => r.kind))], forType(settings, p.typeId), timezone);
         if (capture.score !== null && capture.score > settings.capture_threshold) continue;
@@ -291,11 +291,12 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     },
   });
   // Google Places: every call is counted against the run's limit, and a failure is noted, never fatal.
-  const placesUse = { calls: 0, not_made_at_limit: 0, failed: 0 };
-  const askPlaces = async (search: PlacesSearch): Promise<{ places: Place[]; nextPageToken: string | null } | null> => {
+  const placesUse: { calls: number; not_made_at_limit: number; failed: number; by_kind: Record<string, number> } = { calls: 0, not_made_at_limit: 0, failed: 0, by_kind: {} };
+  const askPlaces = async (search: PlacesSearch, kind: string): Promise<{ places: Place[]; nextPageToken: string | null } | null> => {
     if (!ctx.places) return null;
     if (placesUse.calls >= settings.max_places_calls_per_run) { placesUse.not_made_at_limit += 1; return null; }
     placesUse.calls += 1;
+    placesUse.by_kind[kind] = (placesUse.by_kind[kind] ?? 0) + 1;
     try {
       return await ctx.places.searchText(search);
     } catch {
@@ -587,7 +588,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
             const key = `${pair.typeId}|${pair.area}|${phrase}`;
             if (tally.found >= cap || (page > 0 && !tokens.get(key))) continue;
             const token = tokens.get(key);
-            const got = await askPlaces({ query: `${phrase} in ${pair.area}`, pageSize: 20, ...(token ? { pageToken: token } : {}) });
+            const got = await askPlaces({ query: `${phrase} in ${pair.area}`, pageSize: 20, ...(token ? { pageToken: token } : {}) }, pair.typeId);
             tokens.set(key, got?.nextPageToken ?? null);
             for (const found of got?.places ?? []) {
               if (tally.found >= cap) break;
@@ -693,7 +694,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     const self = await placeOf(db, scope(lastRunId), t.prospectId);
     if (!self?.location || self.hasRivals) continue;
     // The same kind of business, always: a solicitor is compared with solicitors.
-    const got = await askPlaces({ query: forType(settings, t.typeId).type.search_phrases[0] as string, pageSize: 10, near: { ...self.location, radiusMetres: settings.rival_search_radius_metres } });
+    const got = await askPlaces({ query: forType(settings, t.typeId).type.search_phrases[0] as string, pageSize: 10, near: { ...self.location, radiusMetres: settings.rival_search_radius_metres } }, t.typeId);
     if (!got) continue;
     const near = got.places.filter((pl) => pl.id !== self.placeId && pl.operational && pl.website);
     for (const pl of near) await recordPlace(pl, t.area ?? areasCovered[0] ?? settings.area, lastRunId, t.typeId);
@@ -705,10 +706,12 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   due.length = Math.min(due.length, settings.shortlist_size);
 
   // ---- rivals: tested only for a business that has itself scored low ----------
-  const wanted: { prospect: ProspectRow; purpose: "prospect" | "rival" }[] = [];
+  const wanted: { prospect: ProspectRow; purpose: "prospect" | "rival"; slot?: Slot | null }[] = [];
   const seen = new Set<string>();
   /** Which of a prospect's rivals still have a result to come. Those that can be sent an enquiry and have none are queued for one. */
   const rivalsToCome = async (linked: Due["linked"]): Promise<boolean> => {
+    // A rival is tested in the same slot as the business it is set beside.
+    const slot = linked?.self.slot ?? null;
     const rivals = linked?.competitors ?? [];
     if (rivals.length === 0) return false;
     if (await rivalsPending(db, scope(lastRunId), rivals.map((r) => r.prospect_id), settings, clock())) return true;
@@ -723,7 +726,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
       queued = true;
       if (seen.has(rival.prospectId)) continue;
       seen.add(rival.prospectId);
-      wanted.push({ prospect: rival, purpose: "rival" });
+      wanted.push({ prospect: rival, purpose: "rival", slot });
     }
     return queued;
   };
@@ -744,7 +747,13 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   // ---- propose the day's enquiries -----------------------------------------
   if (testing) {
     // Rivals of businesses that scored low come first, to finish a comparison in hand. Then new businesses, best fit first.
-    for (const p of toTest) if (!seen.has(p.prospectId)) wanted.push({ prospect: p, purpose: "prospect" });
+    // The day's allowance is shared evenly across the kinds of business: one from each kind in turn, best fit first
+    // within a kind. A kind with fewer ready than its share passes the rest on.
+    const byKind = new Map<string, ProspectRow[]>();
+    for (const p of toTest) if (!seen.has(p.prospectId)) byKind.set(p.typeId, [...(byKind.get(p.typeId) ?? []), p]);
+    for (let turn = 0; [...byKind.values()].some((list) => list.length > turn); turn += 1) {
+      for (const list of byKind.values()) if (list[turn]) wanted.push({ prospect: list[turn] as ProspectRow, purpose: "prospect" });
+    }
     let allowance = await allowanceLeft(db, scope(lastRunId), clock());
     if (wanted.length > 0 && allowance <= 0) notes.push(`${wanted.length} businesses are ready for a test enquiry, but today's allowance is used up (or none is set). They wait for tomorrow.`);
     if (wanted.length > 0 && allowance > 0) {
@@ -780,7 +789,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
           continue;
         }
         if (!draft) { tally.enquiries_dropped += 1; continue; }
-        const result = await proposeEnquiry(db, ctx.gateway, scope(runId), want.prospect, draft, clock(), want.purpose, namedService);
+        const result = await proposeEnquiry(db, ctx.gateway, scope(runId), want.prospect, draft, clock(), want.purpose, namedService, want.slot ?? null, settings.enquiry_slots);
         if (result.proposed) {
           tally.enquiries_proposed[want.purpose] += 1;
           allowance -= 1;
@@ -929,7 +938,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   };
   const title = `Shortlist, ${day}`;
   if (ctx.places) {
-    notes.push(`Google Places: ${placesUse.calls} calls made this run (limit ${settings.max_places_calls_per_run}), each billed by Google as "${PLACES_PRICE_TIERS.search}"` +
+    notes.push(`Google Places: ${placesUse.calls} calls made this run${placesUse.calls > 0 ? ` (${Object.entries(placesUse.by_kind).map(([k, n]) => `${k} ${n}`).join(", ")})` : ""}, limit ${settings.max_places_calls_per_run}, each billed by Google as "${PLACES_PRICE_TIERS.search}"` +
       `${placesUse.not_made_at_limit > 0 ? `; ${placesUse.not_made_at_limit} more were not made at the limit` : ""}${placesUse.failed > 0 ? `; ${placesUse.failed} failed and were skipped` : ""}. This cost is not in the model cost below.`);
   } else notes.push("Google Places is not configured (no key), so businesses were found by web search.");
   const timezone = (await db.tx(tenantId, async (tx) => (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone)) as string;
@@ -957,10 +966,18 @@ function resultFacts(t: TestedProspect): string[] {
     first
       ? `A person replied ${sayMinutes((new Date(first.received_at).getTime() - sent.getTime()) / 60000)} after it was sent.`
       : "Nobody replied in the first 24 hours.",
+    ...(t.test.slot ? [`${sentWhen(t.test, t.timezone ?? "Europe/London")}.`] : []),
     ...(t.test.replies.some((r) => r.kind === "automatic") ? ["An automatic acknowledgement came back. It is not a reply from a person."] : []),
     ...(first?.answered ? [`The reply ${first.answered.value ? "answered" : "did not answer"} the question asked.`] : []),
     ...(first?.next_step ? [`The reply ${first.next_step.value ? "offered" : "did not offer"} a next step.`] : []),
   ];
+}
+
+/** "Sent Tuesday 19:42, when they were closed", in the tenant's own time. */
+function sentWhen(test: TestResult, timezone: string): string {
+  const at = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, weekday: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(test.sent_at)).replace(",", "");
+  const state = test.opening_state === "closed" ? "when they were closed" : test.opening_state === "open" ? "when they were open" : "their opening hours are not known";
+  return `Sent ${at}, ${state} (${SLOT_NAME[test.slot as Slot]})`;
 }
 
 /** Shortlisted businesses whose card says their rivals' results were still to come. */
@@ -974,15 +991,16 @@ async function cardsAwaitingRivals(db: Db, scope: ProspectScope): Promise<Prospe
 /** Is any of these rivals still to be heard about: an enquiry waiting for a yes, waiting to be sent, or inside its waiting time? */
 async function rivalsPending(db: Db, scope: ProspectScope, rivalIds: string[], settings: OutreachSettings, now: Date): Promise<boolean> {
   if (rivalIds.length === 0) return false;
-  const due = new Date(now.getTime() - settings.reply_wait_hours * 60 * 60 * 1000);
   return db.tx(scope.tenantId, async (tx) =>
     (await tx.query(
-      `select 1 from enquiries where prospect_id = any ($1) and (status in ('proposed', 'approved', 'sending') or (status = 'sent' and sent_at > $2))
+      `select 1 from enquiries e join prospects p on p.prospect_id = e.prospect_id
+        where e.prospect_id = any ($1) and (e.status in ('proposed', 'queued', 'approved', 'sending')
+           or (e.status = 'sent' and not (coalesce((p.test_result ->> 'score_after')::timestamptz, e.sent_at + ($3 * interval '1 hour')) <= $2)))
        union all
        -- a rival found by Places that has not been analysed yet: its pages are read on the next run
        select 1 from prospects where prospect_id = any ($1) and stage = 'found' and website is not null and purged_at is null
        limit 1`,
-      [rivalIds, due],
+      [rivalIds, now, settings.reply_wait_hours],
     )).rows.length > 0);
 }
 
@@ -1000,7 +1018,10 @@ async function retested(db: Db, scope: ProspectScope, p: ProspectRow, settings: 
     const price = typeof p.analysis?.highest_value_price === "object" && p.analysis.highest_value_price !== null ? (p.analysis.highest_value_price as { amount: number; source_url: string }) : null;
     return {
       ...p, test, capture: captureFor(test, [...new Set(p.routes.map((r) => r.kind))], forType(settings, p.typeId), row.timezone),
-      leak: estimateLeak(price, { minutesToReply: people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null }, forType(settings, p.typeId)),
+      leak: estimateLeak(price, {
+        minutesToReply: people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null,
+        ...(sentOutOfHours(test) ? { outOfHours: { useful: usefulOutOfHours(test, row.timezone).band !== null } } : {}),
+      }, forType(settings, p.typeId)),
       enquiry: { subject: row.subject, body: row.body, to: row.to_address },
     };
   });
@@ -1059,7 +1080,7 @@ export function renderShortlist(
           ...(enquiries.rung !== undefined && enquiries.rung >= 3
             ? [`**Sent without asking since the last shortlist was written: ${enquiries.sent_without_asking?.total ?? 0}**` +
                 `${(enquiries.sent_without_asking?.total ?? 0) > 0 ? ` (${Object.entries(enquiries.sent_without_asking?.by_kind ?? {}).map(([kind, n]) => `${kind} ${n}`).join(", ")})` : ""}. ` +
-                `Test enquiries send themselves, inside the daily limit and the sending hours (${settings.enquiry_send_from} to ${settings.enquiry_send_until} on working days). ` +
+                `Test enquiries send themselves, inside the daily limit, every day between ${settings.enquiry_send_from} and ${settings.enquiry_send_until}, spread across working hours, weekday evenings and weekends. ` +
                 `The full text of each, and who it went to, is in the room's list of sent enquiries (GET /v1/rooms/${enquiries.room ?? "<room>"}/enquiries).`, ""]
             : []),
           `**Test enquiries:** ${enquiries.waiting_for_approval} waiting for your approval, ${enquiries.approved_not_sent} approved and waiting to be sent, ` +
@@ -1140,8 +1161,11 @@ export function renderShortlist(
         "",
         "Evidence:", "",
         `- Test enquiry sent ${when(t.test.sent_at)}, signed "${settings.enquiry_signoff}", asking: ${quote(t.enquiry.body)}`,
+        ...(t.test.slot ? [`- ${sentWhen(t.test, timezone)}`] : []),
         firstReply ? `- A person replied ${when(firstReply.received_at)}: ${quote(firstReply.text)}` : `- No reply from a person within ${settings.reply_wait_hours} hours.`,
-        ...(t.test.replies.some((r) => r.kind === "automatic") ? ["- An automatic acknowledgement was received. It is noted and not counted as a reply."] : []),
+        ...(t.test.replies.some((r) => r.kind === "automatic" && (r.answered?.value === true || r.next_step?.value === true))
+          ? ["- An automatic reply came back that answered the question or offered a way to book. For an enquiry sent while they were shut, that counts as something useful."] : []),
+        ...(t.test.replies.some((r) => r.kind === "automatic" && r.answered?.value !== true && r.next_step?.value !== true) ? ["- An automatic acknowledgement was received. It is noted and not counted as a reply."] : []),
         ...(p.places?.opening_hours && p.places.opening_hours.periods.length > 0
           ? [`- By the opening hours Google shows for them, the enquiry was sent ${openAt(p.places.opening_hours.periods, new Date(t.test.sent_at), timezone) ? "while they were open" : "while they were closed"} (source: ${p.places.source_url}).`]
           : []),

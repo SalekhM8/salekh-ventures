@@ -5,7 +5,7 @@ import { ControlError } from "../control/errors.js";
 import { tenantDay } from "../control/runs.js";
 import { companyNumberKey, domainKey, hostKey, nameKey, namePostcodeHash, namesNearlyMatch, postcodeKey } from "./normalise.js";
 import type { Place } from "../control/connectors/places.js";
-import { captureFor, sayMinutes, serviceFor, type TestResult } from "./enquiry-rules.js";
+import { captureFor, sayMinutes, serviceFor, SLOT_NAME, type Slot, type TestResult } from "./enquiry-rules.js";
 import { applyFilters, isGroup, scoreProspect, type Analysis, type Draft, type Scorable } from "./score.js";
 import { FIRST_TYPE_ID, forType } from "./settings.js";
 import { SIGNALS, type OutreachSettings } from "./settings.js";
@@ -580,14 +580,15 @@ export async function triageAnalysed(
  * Tested businesses that are due to be scored and whose company has not been confirmed. Looked up at Companies
  * House only now, after the test, and only by the caller for those that scored low.
  */
-export async function awaitingCompanyCheck(db: Db, scope: ProspectScope, dueBefore: Date): Promise<(ProspectRow & { testResult: unknown; companyNumber: string | null })[]> {
+export async function awaitingCompanyCheck(db: Db, scope: ProspectScope, now: Date, waitHours: number): Promise<(ProspectRow & { testResult: unknown; companyNumber: string | null })[]> {
   return db.tx(scope.tenantId, async (tx) =>
     (await tx.query(
       `select ${COLUMNS.split(", ").map((c) => `p.${c}`).join(", ")}, p.test_result, p.companies_house_number
          from prospects p join enquiries e on e.prospect_id = p.prospect_id and e.status = 'sent'
-        where p.business_id = $1 and p.stage = 'analysed' and p.capture_score is null and e.sent_at <= $2 and p.purged_at is null
+        where p.business_id = $1 and p.stage = 'analysed' and p.capture_score is null and p.purged_at is null
+          and coalesce((p.test_result ->> 'score_after')::timestamptz, e.sent_at + ($3 * interval '1 hour')) <= $2
           and p.is_limited_company in ('not_found', 'not_checked')`,
-      [scope.businessId, dueBefore],
+      [scope.businessId, now, waitHours],
     )).rows.map((r) => ({ ...toRow(r), testResult: r.test_result, companyNumber: r.companies_house_number })));
 }
 
@@ -662,7 +663,12 @@ export async function nextPairs(db: Db, scope: ProspectScope, typeIds: string[],
     const when = new Map(done.rows.map((r) => [`${r.type_id}|${r.area}`, { last: (r.last_searched_at as Date).getTime(), times: r.times_searched as number }]));
     const all = areas.flatMap((area, a) => typeIds.map((typeId, t) => ({ typeId, area, a, t, last: when.get(`${typeId}|${area}`)?.last ?? -1, times: when.get(`${typeId}|${area}`)?.times ?? 0 })));
     // Pairs searched in the same run share a time, so the count of searches breaks the tie: the one searched least goes first.
-    const picked = all.sort((x, y) => x.last - y.last || x.times - y.times || x.a - y.a || x.t - y.t).slice(0, howMany).map(({ typeId, area }) => ({ typeId, area }));
+    const order = (x: (typeof all)[number], y: (typeof all)[number]) => x.last - y.last || x.times - y.times || x.a - y.a || x.t - y.t;
+    // EVERY KIND, EVERY RUN: first one place for each kind (the one it searched longest ago), so no kind waits days
+    // for its turn. Then, if the run has room for more, the pairs searched longest ago whatever their kind.
+    const first = typeIds.map((typeId) => all.filter((p) => p.typeId === typeId).sort(order)[0]).filter((p) => p !== undefined);
+    const rest = all.filter((p) => !first.includes(p)).sort(order).slice(0, Math.max(0, howMany - first.length));
+    const picked = [...first, ...rest].map(({ typeId, area }) => ({ typeId, area }));
     for (const pair of picked) {
       await tx.query(
         `insert into search_coverage (tenant_id, business_id, type_id, area, last_searched_at) values ($1, $2, $3, $4, $5)
@@ -697,6 +703,8 @@ export interface PublicFacts {
   capture_score: number | null;
   /** Minutes to a person's first reply. null with tested "scored" means nobody replied. */
   reply_minutes: number | null;
+  /** Which part of the week its enquiry was sent in. Two businesses are compared on their replies only when this is the same. */
+  slot: Slot | null;
 }
 
 function publicFacts(r: any, settings: OutreachSettings, timezone: string, now: Date): PublicFacts {
@@ -705,7 +713,7 @@ function publicFacts(r: any, settings: OutreachSettings, timezone: string, now: 
   const kinds = new Map<string, string>();
   for (const route of r.contact_routes as { kind: string; source_url: string }[]) if (!kinds.has(route.kind)) kinds.set(route.kind, route.source_url);
   const test = r.test_result as TestResult | null;
-  const due = test ? new Date(test.sent_at).getTime() + settings.reply_wait_hours * 60 * 60 * 1000 <= now.getTime() : false;
+  const due = test ? (test.score_after ? new Date(test.score_after).getTime() : new Date(test.sent_at).getTime() + settings.reply_wait_hours * 60 * 60 * 1000) <= now.getTime() : false;
   const people = (test?.replies ?? []).filter((x) => x.kind === "person").sort((x, y) => x.received_at.localeCompare(y.received_at));
   return {
     prospect_id: r.prospect_id, name: r.name, website: r.website,
@@ -716,6 +724,7 @@ function publicFacts(r: any, settings: OutreachSettings, timezone: string, now: 
     tested: !test ? "no" : due ? "scored" : "awaiting",
     capture_score: test && due ? captureFor(test, [...kinds.keys()], settings, timezone).score : null,
     reply_minutes: test && due && people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null,
+    slot: test?.slot ?? null,
   };
 }
 
@@ -775,6 +784,8 @@ export interface Comparison {
  * "not found" where something is not known, and every source listed once.
  */
 export function compare(self: PublicFacts, competitors: PublicFacts[]): Comparison | null {
+  // Fixtures and businesses tested before there were slots have none: they compare with anything.
+  const sameSlot = (f: PublicFacts) => !f.slot || !self.slot || f.slot === self.slot;
   if (competitors.length === 0) return null;
   const sources: string[] = [];
   const ref = (url: string): string => {
@@ -791,9 +802,11 @@ export function compare(self: PublicFacts, competitors: PublicFacts[]): Comparis
     row("Ways to enquire", (f) => (f.routes.length ? f.routes.map((r) => `${r.kind}${ref(r.source_url)}`).join(", ") : "not found")),
     row("Front desk job advert", (f) => (typeof f.front_desk_advert === "object" ? `advert found${ref(f.front_desk_advert.source_url)}` : "not found")),
     row("Opening hours", (f) => (typeof f.opening_hours === "object" ? `${f.opening_hours.value}${ref(f.opening_hours.source_url)}` : "not found")),
+    // A reply to an enquiry sent at noon says nothing about one sent on a Saturday. Only the same slot is set side by side.
     row("Reply to the test enquiry", (f) =>
-      !f.tested || f.tested === "no" ? "Not tested yet" : f.tested === "awaiting" ? "Sent, awaiting the wait" : f.reply_minutes === null ? "no reply from a person" : `a person replied in ${sayMinutes(f.reply_minutes)}`),
-    row("Capture score", (f) => (f.tested === "scored" && f.capture_score !== null ? `${f.capture_score} out of 100` : "Not tested yet")),
+      !f.tested || f.tested === "no" ? "Not tested yet" : f.tested === "awaiting" ? "Sent, awaiting the wait" : !sameSlot(f) ? `tested ${SLOT_NAME[f.slot as Slot]}: not compared`
+        : f.reply_minutes === null ? "no reply from a person" : `a person replied in ${sayMinutes(f.reply_minutes)}`),
+    row("Capture score", (f) => (f.tested === "scored" && f.capture_score !== null ? (sameSlot(f) ? `${f.capture_score} out of 100` : `${f.capture_score} out of 100 (${SLOT_NAME[f.slot as Slot]})`) : "Not tested yet")),
     "",
     "Sources:",
     ...sources.map((url, i) => `${i + 1}. ${url}`),
@@ -808,7 +821,7 @@ export function compare(self: PublicFacts, competitors: PublicFacts[]): Comparis
     }
     if (typeof c.opening_hours === "object" && self.opening_hours === "not found") unfavourable.push(`${c.name} publishes its opening hours; none were found for ${self.name}.`);
     // Measured by the same kind of test enquiry, sent to both.
-    if (self.tested === "scored" && c.tested === "scored" && c.reply_minutes !== null && (self.reply_minutes === null || c.reply_minutes < self.reply_minutes)) {
+    if (self.tested === "scored" && c.tested === "scored" && sameSlot(c) && c.reply_minutes !== null && (self.reply_minutes === null || c.reply_minutes < self.reply_minutes)) {
       unfavourable.push(`${c.name} replied to the same kind of enquiry in ${sayMinutes(c.reply_minutes)}; ${self.name} ${self.reply_minutes === null ? "did not reply" : `replied in ${sayMinutes(self.reply_minutes)}`}.`);
     }
   }

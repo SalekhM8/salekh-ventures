@@ -279,7 +279,7 @@ test("the migration runner applies each file once and notices an edited file", a
   const { migrate } = await import("../dist/migrate.js");
   assert.deepEqual(await migrate({ connectionString: adminUrl() }), []);
   const applied = await rows(h, "select name from schema_migrations order by name");
-  assert.equal(applied.length, 12);
+  assert.equal(applied.length, 13);
   assert.match(applied[0].name, /^0001_/);
   await h.admin.query("update schema_migrations set checksum = 'edited' where name = $1", [applied[7].name]);
   try {

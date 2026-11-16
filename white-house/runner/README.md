@@ -164,7 +164,7 @@ A business's own pages are read directly by the runner (`src/control/connectors/
 
 ## Test enquiries that send themselves
 
-`npm run outreach-settings -- --enquiry-rung 3` (the owner's switch; `2` goes back to "each needs your yes"). At rung 3 a test enquiry is queued, checked again in the moment before it goes, and sent only on working days between 09:00 and 17:30, 90 seconds apart, inside the daily cap. Sending stops for the day after more than three failed sends or bounces, any reply that reads as a complaint, or a refused mailbox login. Bank holidays are not known to the system: add them to `enquiry_no_send_dates`. See `DEPLOY.md` for the server.
+`npm run outreach-settings -- --enquiry-rung 3` (the owner's switch; `2` goes back to "each needs your yes"). At rung 3 a test enquiry is queued, given one of three slots (working hours, a weekday evening, the weekend) so each kind of business is tested evenly across them, checked again in the moment before it goes, and sent in its slot between 07:00 and 21:30, 90 seconds apart, inside the daily cap. An enquiry sent while a business was shut is scored on whether anything useful came back before it next opened. Sending stops for the day after more than three failed sends or bounces, any reply that reads as a complaint, or a refused mailbox login. Bank holidays are not known to the system: add them to `non_working_dates`. See `DEPLOY.md` for the server.
 
 ## Kinds of business
 

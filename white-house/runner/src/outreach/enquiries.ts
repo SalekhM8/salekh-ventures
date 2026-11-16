@@ -8,7 +8,7 @@ import { isUniqueViolation, lock, type Db, type Tx } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import type { Gateway } from "../control/gateway.js";
 import { finishRun, startRun, tenantDay } from "../control/runs.js";
-import { asksNotToBeContacted, captureFor, estimateLeak, isAutomatic, isBounce, lintEnquiry, readsAsComplaint, type Capture, type EnquiryDraft, type Leak, type StoredReply, type TestResult } from "./enquiry-rules.js";
+import { asksNotToBeContacted, captureFor, estimateLeak, isAutomatic, isBounce, lintEnquiry, readsAsComplaint, sentOutOfHours, SLOTS, usefulOutOfHours, type Slot, type Capture, type EnquiryDraft, type Leak, type StoredReply, type TestResult } from "./enquiry-rules.js";
 export type { StoredReply, TestResult } from "./enquiry-rules.js";
 import { companyNumberKey, domainKey } from "./normalise.js";
 import { applyFilters, isGroup, scoreProspect, type Scorable } from "./score.js";
@@ -71,6 +71,10 @@ export type ProposeResult =
  */
 export async function proposeEnquiry(
   db: Db, gateway: Gateway, scope: ProspectScope, prospect: ProspectRow, draft: EnquiryDraft, now: Date, purpose: "prospect" | "rival" = "prospect", service: string | null = null,
+  /** A rival is tested in the same slot as the business it is compared with, or the two results say nothing about each other. */
+  slot: Slot | null = null,
+  /** The slots in use (the setting). */
+  slots: readonly Slot[] = SLOTS,
 ): Promise<ProposeResult> {
   const to = emailFor(prospect);
   if (!to) return { proposed: false, why: "refused", detail: "no_email_published" };
@@ -90,6 +94,9 @@ export async function proposeEnquiry(
         // inside the sending hours and with the gap. It is never recorded as approved, because nobody approved it.
         [enquiryId, scope.tenantId, scope.businessId, prospect.prospectId, to, to, draft.subject, draft.body, now, purpose, rung >= 3 ? "queued" : "proposed", service],
       );
+      // Its slot: the part of the week this kind of business has been tested in least, so each kind is spread across all three.
+      if (rung >= 3) await tx.query("update enquiries set sent_slot = $2 where enquiry_id = $1", [enquiryId, slot ?? (await leastUsedSlot(tx, scope.businessId, prospect.typeId, now, slots))]);
+      await tx.query("select 1");
       return null;
     });
     if (blocked) return { proposed: false, why: blocked === "suppressed" ? "suppressed" : "refused" };
@@ -310,8 +317,10 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
       }
       let complaint = machine !== true && readsAsComplaint(mail.text);
       if (machine === true) stored.kind = "automatic";
-      else if (ctx.model && ctx.apiKey) {
-        // The headers do not settle it: one cheap call reads the reply. Its cost goes on a run for this room.
+      if (ctx.model && ctx.apiKey) {
+        // One cheap call reads the reply: is it from a person (when the headers do not settle it), did it answer the
+        // question, did it offer a next step. An automatic reply is read too, because one that gives the price or a way
+        // to book is useful to someone writing at night, and a bare "we have received your message" is not.
         const business = e.business_id as string;
         if (!(business in runs)) {
           const started = await startRun(ctx.db, { tenantId: ctx.tenantId, businessId: business, department: DEPARTMENT, trigger: "outreach:replies", model: "claude-haiku-5-5" }, { now: ctx.now() });
@@ -322,11 +331,14 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
           const { reply, reading } = await readReply(ctx.model, ctx.apiKey, ctx.system, `${e.subject}\n\n${e.body}`, mail.text);
           addTo(totals[business] as StageTotals, reply);
           if (reading) {
-            stored.kind = reading.fromAPerson ? "person" : "automatic";
+            // The headers have the last word on whether a machine sent it.
+            if (machine !== true) stored.kind = reading.fromAPerson ? "person" : "automatic";
             stored.answered = reading.answered;
             stored.next_step = reading.nextStep;
-            optOut = optOut || reading.asksNotToBeContacted;
-            complaint = complaint || reading.asksNotToBeContacted;
+            if (machine !== true) {
+              optOut = optOut || reading.asksNotToBeContacted;
+              complaint = complaint || reading.asksNotToBeContacted;
+            }
           }
         }
       }
@@ -374,6 +386,8 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
 // ---- the capture score -----------------------------------------------------
 
 export interface TestedProspect extends ProspectRow {
+  /** The tenant's time zone, for saying when an enquiry was sent in its own time. */
+  timezone?: string;
   test: TestResult;
   capture: Capture;
   leak: Leak;
@@ -389,7 +403,6 @@ export interface TestedProspect extends ProspectRow {
 export async function scoreTested(
   db: Db, scope: ProspectScope, settings: OutreachSettings, now: Date, toRow: (r: any) => ProspectRow, columns: string,
 ): Promise<{ scored: number; filtered: Record<string, number>; passed: TestedProspect[] }> {
-  const due = new Date(now.getTime() - settings.reply_wait_hours * 60 * 60 * 1000);
   return db.tx(scope.tenantId, async (tx) => {
     await lock(tx, "prospects", scope.tenantId, scope.businessId);
     const timezone = (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone as string;
@@ -398,16 +411,16 @@ export async function scoreTested(
       // Stage 'tested' with no card: scored on an earlier run and held over, so it is offered again without being scored twice.
       `select ${columns.split(", ").map((c) => `p.${c}`).join(", ")}, p.stage, p.test_result, e.subject as enquiry_subject, e.body as enquiry_body, e.to_address as enquiry_to
          from prospects p join enquiries e on e.prospect_id = p.prospect_id and e.status = 'sent'
-        where p.business_id = $1 and e.sent_at <= $2 and p.purged_at is null
+        where p.business_id = $1 and coalesce((p.test_result ->> 'score_after')::timestamptz, e.sent_at + ($3 * interval '1 hour')) <= $2 and p.purged_at is null
           and ((p.stage = 'analysed' and p.capture_score is null) or p.stage = 'tested')
         order by e.sent_at, p.prospect_id`,
-      [scope.businessId, due],
+      [scope.businessId, now, settings.reply_wait_hours],
     );
     // A rival that is not itself a candidate (it failed the fit filters earlier) still gets its score recorded, for the comparison.
     const others = await tx.query(
       `select p.prospect_id, p.contact_routes, p.test_result from prospects p join enquiries e on e.prospect_id = p.prospect_id and e.status = 'sent'
-        where p.business_id = $1 and e.sent_at <= $2 and p.purged_at is null and p.capture_score is null and p.stage not in ('analysed', 'tested') and p.test_result is not null`,
-      [scope.businessId, due],
+        where p.business_id = $1 and coalesce((p.test_result ->> 'score_after')::timestamptz, e.sent_at + ($3 * interval '1 hour')) <= $2 and p.purged_at is null and p.capture_score is null and p.stage not in ('analysed', 'tested') and p.test_result is not null`,
+      [scope.businessId, now, settings.reply_wait_hours],
     );
     for (const r of others.rows) {
       const capture = captureFor(r.test_result as TestResult, [...new Set((r.contact_routes as { kind: string }[]).map((x) => x.kind))], settings, timezone);
@@ -443,7 +456,8 @@ export async function scoreTested(
       const people = test.replies.filter((r) => r.kind === "person").sort((a, b) => a.received_at.localeCompare(b.received_at));
       const minutesToReply = people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null;
       const price = typeof p.analysis?.highest_value_price === "object" && p.analysis.highest_value_price !== null ? (p.analysis.highest_value_price as { amount: number; source_url: string }) : null;
-      const leak = estimateLeak(price, { minutesToReply }, own);
+      const shut = sentOutOfHours(test);
+      const leak = estimateLeak(price, { minutesToReply, ...(shut ? { outOfHours: { useful: usefulOutOfHours(test, timezone).band !== null } } : {}) }, own);
       const verdict = test.opted_out ? { keep: false as const, reason: "opted_out" }
         // The enquiry never reached them, so their silence says nothing about how they answer.
         : test.replies.some((r) => r.kind === "bounce") ? { keep: false as const, reason: "enquiry_bounced" }
@@ -461,7 +475,7 @@ export async function scoreTested(
         filtered[reason] = (filtered[reason] ?? 0) + 1;
         continue;
       }
-      passed.push({ ...p, score: fit.score, breakdown: { ...fit.breakdown }, test, capture, leak, enquiry: { subject: raw.enquiry_subject, body: raw.enquiry_body, to: raw.enquiry_to } });
+      passed.push({ ...p, timezone, score: fit.score, breakdown: { ...fit.breakdown }, test, capture, leak, enquiry: { subject: raw.enquiry_subject, body: raw.enquiry_body, to: raw.enquiry_to } });
     }
     passed.sort((a, b) => (a.capture.score ?? 0) - (b.capture.score ?? 0) || (b.score ?? 0) - (a.score ?? 0));
     return { scored: newlyScored + others.rows.length, filtered, passed };
@@ -470,16 +484,15 @@ export async function scoreTested(
 
 /** Where the day's enquiries have got to, for the shortlist's opening lines. */
 export async function enquiryCounts(db: Db, scope: ProspectScope, settings: OutreachSettings, now: Date): Promise<{ waiting_for_approval: number; approved_not_sent: number; queued_to_send: number; sent_awaiting: number; scored: number }> {
-  const due = new Date(now.getTime() - settings.reply_wait_hours * 60 * 60 * 1000);
   return db.tx(scope.tenantId, async (tx) => {
     const r = (await tx.query(
       `select count(*) filter (where e.status = 'proposed')::int as waiting,
               count(*) filter (where e.status = 'approved')::int as approved,
               count(*) filter (where e.status = 'queued')::int as queued,
-              count(*) filter (where e.status = 'sent' and e.sent_at > $2)::int as awaiting,
+              count(*) filter (where e.status = 'sent' and not (coalesce((p.test_result ->> 'score_after')::timestamptz, e.sent_at + ($3 * interval '1 hour')) <= $2))::int as awaiting,
               count(*) filter (where e.status = 'sent' and p.capture_score is not null)::int as scored
          from enquiries e join prospects p on p.prospect_id = e.prospect_id where e.business_id = $1`,
-      [scope.businessId, due],
+      [scope.businessId, now, settings.reply_wait_hours],
     )).rows[0];
     return { waiting_for_approval: r.waiting, approved_not_sent: r.approved, queued_to_send: r.queued, sent_awaiting: r.awaiting, scored: r.scored };
   });
@@ -627,5 +640,39 @@ export async function sentWithoutAsking(db: Db, scope: ProspectScope, now: Date)
     const by_kind: Record<string, number> = {};
     for (const r of rows) by_kind[r.business_type as string] = (by_kind[r.business_type as string] ?? 0) + 1;
     return { total: rows.length, by_kind, ids: rows.map((r) => r.enquiry_id as string) };
+  });
+}
+
+// ---- slots -----------------------------------------------------------------------------
+
+/**
+ * The slot this kind of business has had fewest enquiries in over the last fortnight (in hours, then evening, then
+ * weekend when level). Counting is by kind, so each kind is tested evenly across all three.
+ */
+export async function leastUsedSlot(tx: Tx, businessId: string, typeId: string, now: Date, slots: readonly Slot[] = SLOTS): Promise<Slot> {
+  const rows = (await tx.query(
+    `select e.sent_slot, count(*)::int as n from enquiries e join prospects p on p.prospect_id = e.prospect_id
+      where e.business_id = $1 and p.business_type = $2 and e.sent_slot is not null and e.status not in ('rejected', 'expired') and e.proposed_at > $3
+      group by e.sent_slot`,
+    [businessId, typeId, new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)],
+  )).rows;
+  const used = new Map(rows.map((r) => [r.sent_slot as Slot, r.n as number]));
+  const inUse = SLOTS.filter((slot) => slots.includes(slot));
+  return [...(inUse.length > 0 ? inUse : SLOTS)].sort((a, b) => (used.get(a) ?? 0) - (used.get(b) ?? 0) || SLOTS.indexOf(a) - SLOTS.indexOf(b))[0] as Slot;
+}
+
+/** Give a slot to every queued enquiry that has none (those queued before there were slots). Returns how many. */
+export async function assignMissingSlots(db: Db, tenantId: string, now: Date, slotsOf: (businessId: string) => Promise<readonly Slot[]> = async () => SLOTS): Promise<number> {
+  const waiting = await db.tx(tenantId, async (tx) => (await tx.query("select distinct business_id from enquiries where status = 'queued' and sent_slot is null")).rows.map((r) => r.business_id as string));
+  if (waiting.length === 0) return 0;
+  const slots = new Map<string, readonly Slot[]>();
+  for (const businessId of waiting) slots.set(businessId, await slotsOf(businessId));
+  return db.tx(tenantId, async (tx) => {
+    await lock(tx, "enquiries", tenantId);
+    const rows = (await tx.query(
+      "select e.enquiry_id, e.business_id, p.business_type from enquiries e join prospects p on p.prospect_id = e.prospect_id where e.status = 'queued' and e.sent_slot is null order by e.proposed_at, e.enquiry_id",
+    )).rows;
+    for (const r of rows) await tx.query("update enquiries set sent_slot = $2 where enquiry_id = $1", [r.enquiry_id, await leastUsedSlot(tx, r.business_id as string, r.business_type as string, now, slots.get(r.business_id as string))]);
+    return rows.length;
   });
 }
