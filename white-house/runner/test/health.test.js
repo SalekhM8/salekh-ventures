@@ -18,8 +18,8 @@ test("health check answers ok", async () => {
     const res = await fetch(`${base}/health`);
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.status, "ok");
-    assert.equal(body.service, "white-house-runner");
+    // Nothing but "ok": no version, no uptime, no word on what is running behind it.
+    assert.deepEqual(body, { status: "ok" });
   });
 });
 

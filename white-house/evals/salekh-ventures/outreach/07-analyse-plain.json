@@ -1,0 +1,38 @@
+{
+  "id": "salekh-ventures-outreach-07-analyse-plain",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "analyse",
+  "title": "An ordinary clinic site",
+  "expected": "Each field is filled from the pages with its page, the owner is named from the team page, contact routes and company number are read by code.",
+  "outreach": {
+    "name": "Fixture Smile Dental",
+    "area": "Fixtureton",
+    "pages": [
+      {
+        "url": "https://www.fixture-smile.example.test/",
+        "text": "Fixture Smile Dental. Private general and cosmetic dentistry in Fixtureton. Dental implants from 2,000 pounds. Opening hours: Monday to Friday 9am to 5pm."
+      },
+      {
+        "url": "https://www.fixture-smile.example.test/team",
+        "text": "Meet the team. Dr Alex Fixture-Owner, principal dentist and practice owner. Sam Fixture-Nurse, dental nurse. Chris Fixture-Desk, receptionist."
+      },
+      {
+        "url": "https://www.fixture-smile.example.test/contact",
+        "text": "Call 0121 496 0000. Use our enquiry form. Fixture Smile Dental Ltd. Company number 01234567. 1 Fixture Street, Fixtureton B1 1AA."
+      }
+    ]
+  },
+  "must_include": [
+    "Alex Fixture-Owner",
+    "\"count\":3",
+    "implants",
+    "01234567",
+    "\"kind\":\"phone\"",
+    "\"kind\":\"form\"",
+    "limited_company",
+    "https://www.fixture-smile.example.test/team"
+  ],
+  "must_never": [
+    "\"contact_person\":\"not found\""
+  ]
+}

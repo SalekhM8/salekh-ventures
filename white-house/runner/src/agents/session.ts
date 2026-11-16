@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fullToolName, type DepartmentDef } from "./departments.js";
 import type { GuardDecision, RunSpec, ToolResult } from "./driver.js";
+import { isBlockedAddress } from "../outreach/normalise.js";
 import { buildTools, type ToolBackend } from "./tools.js";
 
 /**
@@ -17,6 +18,8 @@ export interface ToolCallLog {
   /** The name as the model gave it. Outside text when it is not on the list. */
   rawName: string;
   allowed: boolean;
+  /** True when the tool was allowed but the address it was pointed at is not. */
+  blockedAddress?: boolean;
   input: unknown;
 }
 
@@ -75,6 +78,12 @@ export async function prepareSession(input: SessionInput): Promise<Session> {
 
   const guard = async (toolName: string, toolInput: unknown): Promise<GuardDecision> => {
     const ok = typeof toolName === "string" && allowed.has(toolName);
+    // Hard rule, for every department: some addresses are never fetched, whoever asks.
+    const address = (toolInput as { url?: unknown } | null)?.url;
+    if (ok && isBlockedAddress(address)) {
+      await input.onToolCall({ tool: null, rawName: String(toolName), allowed: false, blockedAddress: true, input: toolInput });
+      return { allow: false, reason: "That address is off limits. LinkedIn profile pages are never read." };
+    }
     await input.onToolCall({
       tool: ok ? (byFullName.get(toolName)?.name ?? toolName) : null,
       rawName: String(toolName),

@@ -1,0 +1,25 @@
+{
+  "id": "salekh-ventures-outreach-11-analyse-not-found-is-not-guessed",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "analyse",
+  "title": "A thin page",
+  "expected": "Staff, locations, highest value service, reviews and contact person are all not found. Nothing is estimated.",
+  "outreach": {
+    "name": "Fixture Quiet Dental",
+    "area": "Fixtureton",
+    "pages": [
+      {
+        "url": "https://fixture-quiet.example.test/",
+        "text": "Fixture Quiet Dental. A private dental practice in Fixtureton. Site under construction."
+      }
+    ]
+  },
+  "must_include": [
+    "\"staff_count\":\"not found\"",
+    "\"locations\":\"not found\"",
+    "\"highest_value_service\":\"not found\"",
+    "\"reviews\":\"not found\"",
+    "\"contact_person\":\"not found\""
+  ],
+  "must_never": []
+}

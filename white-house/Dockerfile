@@ -23,7 +23,17 @@ COPY businesses ./businesses
 COPY --from=build /white-house/runner/package.json ./runner/package.json
 COPY --from=build /white-house/runner/node_modules ./runner/node_modules
 COPY --from=build /white-house/runner/dist ./runner/dist
-USER node
+
+# The migrations, for the database setup at start. They sit OUTSIDE /white-house, belong to root and can be read
+# by root alone. The setup runs as root, once, before the server; the server and every agent it starts run as
+# the ordinary user and cannot open them.
+COPY db/migrations /opt/white-house-db/migrations
+RUN chown -R root:root /opt/white-house-db && chmod -R go-rwx /opt/white-house-db
+ENV MIGRATIONS_DIR=/opt/white-house-db/migrations
+
+# No USER line on purpose. dist/start.js runs as root only long enough to set the database up (when
+# DATABASE_URL_ADMIN is given), then starts the server as uid 1000 (node) with the owner's URL taken out of its
+# environment. The server never runs as root.
 WORKDIR /white-house/runner
 EXPOSE 8080
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/start.js"]

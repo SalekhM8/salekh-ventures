@@ -1,15 +1,25 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Runtime } from "./runtime.js";
 
-const startedAt = Date.now();
 
 export interface ServerOptions {
   /** With no runtime the server answers the health check and nothing else. */
   runtime?: Runtime;
   /** WH_API_TOKEN. The API routes do not start without it. */
   token?: string;
+  /**
+   * true when the server sits behind a proxy that sets X-Forwarded-For (Railway does): the caller's address is
+   * then the first one in that header. false: the address of the connection itself.
+   */
+  trustProxy?: boolean;
+  now?: () => number;
 }
+
+/** After this many wrong or missing tokens from one address inside the window, that address is told to wait. */
+const MAX_FAILED_AUTH = 10;
+const FAILED_AUTH_WINDOW_MS = 5 * 60_000;
+const MAX_TRACKED_ADDRESSES = 5000;
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -30,11 +40,11 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return text ? JSON.parse(text) : {};
 }
 
+/** Constant time: both sides are hashed to the same length first, so neither the token nor its length shows in the timing. */
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith("Bearer ")) return false;
-  const given = Buffer.from(header.slice(7));
-  const wanted = Buffer.from(token);
-  return given.length === wanted.length && timingSafeEqual(given, wanted);
+  const digest = (text: string) => createHash("sha256").update(text).digest();
+  return timingSafeEqual(digest(header.slice(7)), digest(token));
 }
 
 /**
@@ -67,7 +77,16 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.scoreOutput(b as string, body);
         return r.status === 200 ? send(res, 200, { ok: true }) : fail(r);
       }
+      case "GET rooms/:id/approvals": {
+        const r = await rt.listApprovals(b as string);
+        return r.status === 200 ? send(res, 200, { approvals: r.approvals }) : fail(r);
+      }
       case "POST approvals/:id": {
+        // "batch" is not an id: several decisions in one request, each through the single path.
+        if (b === "batch") {
+          const r = await rt.decideBatch(body);
+          return r.status === 200 ? send(res, 200, { results: r.results }) : fail(r);
+        }
         const r = await rt.answerApproval(b as string, body);
         return r.status === 200 ? send(res, 200, r.result) : fail(r);
       }
@@ -90,22 +109,53 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
     }
   }
 
-  return createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://runner");
-    const method = req.method ?? "GET";
-    if (method === "GET" && (url.pathname === "/health" || url.pathname === "/")) {
-      return send(res, 200, {
-        status: "ok",
-        service: "white-house-runner",
-        api: runtime ? "v1" : "off",
-        uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
-      });
+  const clock = options.now ?? Date.now;
+  const failures = new Map<string, { count: number; since: number }>();
+  const addressOf = (req: IncomingMessage): string => {
+    const forwarded = options.trustProxy ? String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim() : "";
+    return (forwarded || req.socket.remoteAddress || "unknown").slice(0, 64);
+  };
+  /** Count one wrong token. Returns true once this address has had too many. */
+  const tooMany = (address: string, failed: boolean): boolean => {
+    const now = clock();
+    let entry = failures.get(address);
+    if (entry && now - entry.since > FAILED_AUTH_WINDOW_MS) { failures.delete(address); entry = undefined; }
+    if (!failed) return (entry?.count ?? 0) >= MAX_FAILED_AUTH;
+    if (!entry) {
+      // Bounded: a flood of addresses cannot grow this without end. The oldest entry goes first.
+      if (failures.size >= MAX_TRACKED_ADDRESSES) failures.delete(failures.keys().next().value as string);
+      entry = { count: 0, since: now };
+      failures.set(address, entry);
     }
-    const parts = url.pathname.split("/").filter(Boolean);
+    entry.count += 1;
+    return entry.count > MAX_FAILED_AUTH;
+  };
+
+  return createServer((req, res) => {
+    let pathname: string;
+    try {
+      pathname = new URL(req.url ?? "/", "http://runner").pathname;
+    } catch {
+      return send(res, 404, { error: "not_found" });
+    }
+    const method = req.method ?? "GET";
+    // The one route with no token. It says the process is up and nothing else: no version, no uptime, no state.
+    if (method === "GET" && pathname === "/health") return send(res, 200, { status: "ok" });
+    const parts = pathname.split("/").filter(Boolean);
     if (!runtime || parts[0] !== "v1") return send(res, 404, { error: "not_found" });
-    if (!tokenMatches(req.headers.authorization, token)) return send(res, 401, { error: "unauthorised" });
+    // Every route under /v1 needs the token. It is checked here, before any route is looked at.
+    const address = addressOf(req);
+    if (!tokenMatches(req.headers.authorization, token)) {
+      if (tooMany(address, true)) {
+        res.setHeader("retry-after", String(Math.ceil(FAILED_AUTH_WINDOW_MS / 1000)));
+        return send(res, 429, { error: "too_many_attempts" });
+      }
+      return send(res, 401, { error: "unauthorised" });
+    }
+    const routeName = `${method} /v1/${parts[1] ?? ""}`.slice(0, 40).replace(/[^A-Za-z0-9/ _-]/g, "");
     api(req, res, method, parts.slice(1), runtime).catch((err: unknown) => {
-      console.error(`${method} ${url.pathname} failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Nothing the caller sent is written to the log: not the path beyond its first word, not the body, not an error's own text.
+      console.error(`${routeName} failed: ${err instanceof Error ? err.name : "error"}`);
       if (!res.headersSent) send(res, 500, { error: "internal_error" });
     });
   });

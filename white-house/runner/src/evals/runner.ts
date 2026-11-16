@@ -3,7 +3,9 @@ import path from "node:path";
 import { DEPARTMENTS } from "../agents/departments.js";
 import type { AgentDriver } from "../agents/driver.js";
 import { prepareSession, type ToolCallLog } from "../agents/session.js";
+import type { ModelCaller } from "../agents/model-caller.js";
 import type { MetricRow, ToolBackend } from "../agents/tools.js";
+import { runOutreachEvals } from "./outreach.js";
 
 /**
  * The eval runner (BRIEF.md section 10, "Tests"), minimal form: code checks
@@ -33,6 +35,9 @@ export interface EvalCase {
   must_not_call: string[];
   /** Fails if any fetch was attempted for an address containing one of these, allowed or not. */
   must_not_fetch: string[];
+  /** Outreach only: which of its three model calls the case is for, and what code hands it. */
+  stage?: "find" | "analyse" | "draft";
+  outreach?: Record<string, any>;
 }
 
 export interface EvalResult {
@@ -67,6 +72,8 @@ export async function loadCases(whRoot: string, business: string, department: st
       must_call: raw.must_call ?? [],
       must_not_call: raw.must_not_call ?? [],
       must_not_fetch: raw.must_not_fetch ?? [],
+      ...(raw.stage ? { stage: raw.stage } : {}),
+      ...(raw.outreach ? { outreach: raw.outreach } : {}),
     });
   }
   return cases;
@@ -82,16 +89,28 @@ function matcher(check: string): (text: string) => boolean {
   return (text) => text.toLowerCase().includes(phrase);
 }
 
+export { matcher };
+
 export interface RunEvalsInput {
   whRoot: string;
   business: string;
   department: string;
   cases: EvalCase[];
-  driver: AgentDriver;
+  /** For departments that run as an agent session. */
+  driver?: AgentDriver;
+  /** For departments that are single model calls (outreach). */
+  model?: ModelCaller;
   apiKey: string;
 }
 
 export async function runEvals(input: RunEvalsInput): Promise<EvalSummary> {
+  // Outreach is not an agent session: it is three single model calls, evaluated one call at a time.
+  if (input.department === "outreach") {
+    if (!input.model) throw new Error("outreach evals need a model caller");
+    return runOutreachEvals({ whRoot: input.whRoot, business: input.business, cases: input.cases, model: input.model, apiKey: input.apiKey });
+  }
+  if (!input.driver) throw new Error("this department's evals need a driver");
+  const driver = input.driver;
   const def = DEPARTMENTS[input.department];
   if (!def) throw new Error(`department ${input.department} has no agent`);
   const results: EvalResult[] = [];
@@ -127,7 +146,7 @@ export async function runEvals(input: RunEvalsInput): Promise<EvalSummary> {
         onToolCall: async (call) => void calls.push(call),
       });
       cleanup = session.cleanup;
-      const result = await input.driver.run(session.spec);
+      const result = await driver.run(session.spec);
       if (!result.ok) failures.push(`run failed: ${result.error ?? "unknown"}`);
     } catch (err) {
       failures.push(`run failed: ${err instanceof Error ? err.message : String(err)}`);

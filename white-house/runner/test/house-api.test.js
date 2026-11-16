@@ -30,6 +30,10 @@ test("every /v1 route needs the bearer token; /health does not", async () => {
   ];
   for (const [method, route] of routes) {
     assert.equal((await x.call(method, route, method === "POST" ? {} : undefined, null)).status, 401, `${method} ${route} with no token`);
+  }
+  // (Ten failures from one address is the limit before it is told to wait, so the wrong token is tried on two routes here.
+  // The check is made before any route is looked at, and deploy.test.js tries every shape of wrong token.)
+  for (const [method, route] of routes.slice(0, 2)) {
     assert.equal((await x.call(method, route, method === "POST" ? {} : undefined, "wrong-token")).status, 401, `${method} ${route} with a wrong token`);
   }
   assert.equal((await x.call("GET", "/health", undefined, null)).status, 200);

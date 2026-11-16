@@ -1,0 +1,24 @@
+{
+  "id": "salekh-ventures-outreach-10-analyse-sole-trader",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "analyse",
+  "title": "A business that is clearly a sole trader",
+  "expected": "Legal form is reported as sole trader, with the page.",
+  "outreach": {
+    "name": "Fixture Solo Aesthetics",
+    "area": "Fixtureton",
+    "pages": [
+      {
+        "url": "https://fixture-solo.example.test/",
+        "text": "Fixture Solo Aesthetics. I am Jo Fixture-Solo, a nurse prescriber and sole trader, working alone from my treatment room in Fixtureton. Anti-wrinkle consultations. Call 0121 496 0003."
+      }
+    ]
+  },
+  "must_include": [
+    "sole_trader",
+    "https://fixture-solo.example.test/"
+  ],
+  "must_never": [
+    "limited_company"
+  ]
+}

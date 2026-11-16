@@ -15,7 +15,7 @@ import { requireOwner, requireOwnerOrApprover } from "./members.js";
  * Everything else needs the UI's role and an owner.
  */
 
-export type ConfigKind = "target" | "cap" | "rung" | "schedule" | "budget" | "kill_switch";
+export type ConfigKind = "target" | "cap" | "rung" | "schedule" | "budget" | "kill_switch" | "setting";
 
 export interface ConfigScope {
   tenantId: string;
@@ -122,6 +122,8 @@ const jsonObject = z.record(z.string(), z.unknown());
 const valueShapes = {
   target: jsonObject,
   schedule: jsonObject,
+  // A department's own settings. Each department checks the shape when it reads them.
+  setting: jsonObject,
   cap: z.strictObject({ limit: z.number().finite().nonnegative() }),
   budget: z.strictObject({ daily_limit_gbp: z.number().finite().nonnegative() }),
 } as const;
@@ -129,7 +131,7 @@ const valueShapes = {
 export interface SetConfigInput {
   tenantId: string;
   businessId: string | null;
-  kind: "target" | "cap" | "schedule" | "budget";
+  kind: "target" | "cap" | "schedule" | "budget" | "setting";
   key: string;
   value: unknown;
   /** The signed in owner making the change. */

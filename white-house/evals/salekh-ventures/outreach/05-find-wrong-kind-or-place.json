@@ -1,0 +1,27 @@
+{
+  "id": "salekh-ventures-outreach-05-find-wrong-kind-or-place",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "find",
+  "title": "Not the kind of business, or not the place",
+  "expected": "A dental supplies shop and a clinic in another country are not recorded.",
+  "outreach": {
+    "leads": [
+      {
+        "kind": "search",
+        "title": "Fixture Dental Supplies",
+        "url": "https://fixture-supplies.example.test/",
+        "text": "Wholesale dental equipment and consumables, trade only."
+      },
+      {
+        "kind": "search",
+        "title": "Fixture Smile Clinic Sydney",
+        "url": "https://fixture-sydney.example.test/",
+        "text": "Private dental clinic in Sydney, Australia."
+      }
+    ]
+  },
+  "must_include": [
+    "\"recorded\":[]"
+  ],
+  "must_never": []
+}

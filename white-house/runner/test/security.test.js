@@ -11,6 +11,7 @@ const ALL_TABLES = [
   "tenants", "businesses", "members", "config_versions", "runs", "events", "proposals", "approvals",
   "actions", "budget_ledger", "metrics", "memory_notes", "scores", "eval_cases", "eval_runs",
   "queue_items", "notifications", "devices", "public_feed", "outputs",
+  "prospects", "prospect_events", "suppressions", "fetched_pages", "prospect_competitors", "search_coverage", "enquiries",
 ];
 
 /** Two tenants, each with rows in every table. */
@@ -58,6 +59,16 @@ async function fill(w) {
      values ($1, $2, 'data', 'working', 'fixture line', now())`, t);
   await h.admin.query(
     `insert into outputs (tenant_id, business_id, department, title, body) values ($1, $2, 'data', 'fixture output', 'fixture body')`, t);
+  const prospect = async (name) => (await h.admin.query(
+    `insert into prospects (tenant_id, business_id, name, domain_key) values ($1, $2, $3, $4) returning prospect_id`, [...t, name, `${name}-${w.tenantId.slice(0, 8)}.example.test`])).rows[0].prospect_id;
+  const one = await prospect("fixture-one");
+  const two = await prospect("fixture-two");
+  await h.admin.query(`insert into prospect_events (tenant_id, business_id, prospect_id, stage, reason) values ($1, $2, $3, 'found', 'fixture')`, [...t, one]);
+  await h.admin.query(`insert into prospect_competitors (tenant_id, business_id, prospect_id, competitor_id, comparison) values ($1, $2, $3, $4, '{}')`, [...t, one, two]);
+  await h.admin.query(`insert into suppressions (tenant_id, kind, value_key, reason) values ($1, 'domain', 'fixture-suppressed.example.test', 'test fixture')`, [w.tenantId]);
+  await h.admin.query(`insert into fetched_pages (tenant_id, business_id, cache_key, day, kind, items) values ($1, $2, repeat('a', 64), '2026-11-16', 'read', '[]')`, t);
+  await h.admin.query(`insert into enquiries (tenant_id, business_id, prospect_id, to_address, to_address_key, subject, body) values ($1, $2, $3, $4, $4, 'fixture subject', 'fixture body')`, [...t, one, `fixture-${w.tenantId.slice(0, 8)}@example.test`]);
+  await h.admin.query(`insert into search_coverage (tenant_id, business_id, area, last_searched_at) values ($1, $2, 'Fixtureton', now())`, t);
 }
 
 before(async () => {
@@ -268,15 +279,15 @@ test("the migration runner applies each file once and notices an edited file", a
   const { migrate } = await import("../dist/migrate.js");
   assert.deepEqual(await migrate({ connectionString: adminUrl() }), []);
   const applied = await rows(h, "select name from schema_migrations order by name");
-  assert.equal(applied.length, 6);
+  assert.equal(applied.length, 11);
   assert.match(applied[0].name, /^0001_/);
-  await h.admin.query("update schema_migrations set checksum = 'edited' where name = $1", [applied[5].name]);
+  await h.admin.query("update schema_migrations set checksum = 'edited' where name = $1", [applied[7].name]);
   try {
     await assert.rejects(migrate({ connectionString: adminUrl() }), /changed since it was applied/);
   } finally {
     const { checksumOf } = await import("../dist/migrate.js");
     await h.admin.query("update schema_migrations set checksum = $2 where name = $1", [
-      applied[5].name, await checksumOf(applied[5].name),
+      applied[7].name, await checksumOf(applied[7].name),
     ]);
   }
 });

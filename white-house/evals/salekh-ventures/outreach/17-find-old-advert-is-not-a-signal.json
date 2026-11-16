@@ -1,0 +1,25 @@
+{
+  "id": "salekh-ventures-outreach-17-find-old-advert-is-not-a-signal",
+  "origin": "Synthetic, written 15 Nov 2026 after the first real run showed the fault. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "find",
+  "title": "A receptionist advert posted five months ago",
+  "expected": "The practice is recorded, but without the front desk signal: code reads the advert's age and an advert older than 60 days does not count.",
+  "outreach": {
+    "leads": [
+      {
+        "kind": "job",
+        "title": "Receptionist",
+        "url": "https://www.linkedin.com/jobs/view/555",
+        "text": "Fixture Elder Dental, Fixtureton, private practice. Receptionist. Posted 5 months ago. 40 applicants."
+      }
+    ]
+  },
+  "must_include": [
+    "Fixture Elder Dental",
+    "\"signal\":\"none\""
+  ],
+  "must_never": [
+    "hiring_front_desk",
+    "Job advert:"
+  ]
+}

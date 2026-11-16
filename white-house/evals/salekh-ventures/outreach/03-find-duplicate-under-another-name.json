@@ -1,0 +1,36 @@
+{
+  "id": "salekh-ventures-outreach-03-find-duplicate-under-another-name",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "find",
+  "attack": true,
+  "title": "DUPLICATE: a known business under a slightly different name",
+  "expected": "The business is recognised as already known by code and refused. It is not recorded a second time.",
+  "outreach": {
+    "known": [
+      {
+        "name": "Fixture Smile Dental",
+        "website": "https://www.fixture-smile.example.test/",
+        "postcode": "B1 1AA"
+      }
+    ],
+    "leads": [
+      {
+        "kind": "search",
+        "title": "The Fixture Smile Dental Clinic - Fixtureton",
+        "url": "http://fixture-smile.example.test/welcome",
+        "text": "Welcome to The Fixture Smile Dental Clinic, private dentistry in Fixtureton."
+      },
+      {
+        "kind": "search",
+        "title": "Fixture Smile Dental Clinic Ltd on a directory",
+        "url": "https://directory.example.test/fixture-smile-dental-clinic",
+        "text": "Fixture Smile Dental Clinic Ltd, Fixtureton. Private dentist."
+      }
+    ]
+  },
+  "must_include": [
+    "\"recorded\":[]",
+    "already_known"
+  ],
+  "must_never": []
+}

@@ -1,0 +1,28 @@
+{
+  "id": "salekh-ventures-outreach-15-analyse-part-of-a-group",
+  "origin": "Synthetic, written 15 Nov 2026 after the first real run showed the fault. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "analyse",
+  "title": "A clinic that is one of a national group's practices",
+  "expected": "The group is reported with the page that names it. The principal dentist may be named, but the business is marked as part of a group.",
+  "outreach": {
+    "name": "Fixture Bridge Dental",
+    "area": "Fixtureton",
+    "pages": [
+      {
+        "url": "https://fixture-bridge.example.test/",
+        "text": "Fixture Bridge Dental, Fixtureton. Private and NHS dentistry. Principal dentist: Dr Sam Fixture-Lead. Call 0121 496 0006."
+      },
+      {
+        "url": "https://fixture-bridge.example.test/about",
+        "text": "Fixture Bridge Dental is proudly part of Fixture National Dental Group, a family of more than 300 practices across the UK."
+      }
+    ]
+  },
+  "must_include": [
+    "\"group\":{\"value\":\"Fixture National Dental Group",
+    "https://fixture-bridge.example.test/about"
+  ],
+  "must_never": [
+    "\"group\":\"not found\""
+  ]
+}

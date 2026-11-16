@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAnthropicCaller } from "../agents/model-caller.js";
 import { createSdkDriver } from "../agents/sdk-driver.js";
 import { apiKeyEnvName } from "../seed.js";
 import { loadCases, runEvals } from "./runner.js";
@@ -25,7 +26,7 @@ if (!apiKey) {
   process.exit(2);
 }
 const cases = await loadCases(whRoot, business, department);
-const summary = await runEvals({ whRoot, business, department, cases, driver: createSdkDriver(), apiKey });
+const summary = await runEvals({ whRoot, business, department, cases, driver: createSdkDriver(), model: createAnthropicCaller(), apiKey });
 for (const r of summary.results) {
   console.log(`${r.passed ? "pass" : "FAIL"}  ${r.id}${r.failures.length ? `\n      ${r.failures.join("\n      ")}` : ""}`);
 }

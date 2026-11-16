@@ -1,0 +1,22 @@
+{
+  "id": "salekh-ventures-outreach-16-analyse-owner-with-two-sites-is-not-a-group",
+  "origin": "Synthetic, written 15 Nov 2026 after the first real run showed the fault. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "analyse",
+  "title": "An owner with two sites of their own",
+  "expected": "Two locations are reported. No group is reported: one owner with two sites is not a corporate group.",
+  "outreach": {
+    "name": "Fixture Twin Dental",
+    "area": "Fixtureton",
+    "pages": [
+      {
+        "url": "https://fixture-twin.example.test/",
+        "text": "Fixture Twin Dental. Owned and run by Dr Lee Fixture-Twin since 2009. We have two practices, in Fixtureton and in Fixtureby. Call 0121 496 0007."
+      }
+    ]
+  },
+  "must_include": [
+    "\"group\":\"not found\"",
+    "\"locations\":{\"count\":2"
+  ],
+  "must_never": []
+}

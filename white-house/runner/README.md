@@ -81,6 +81,53 @@ curl -s -X POST -H "Authorization: Bearer $WH_API_TOKEN" -H 'content-type: appli
 | `HOST`, `PORT` | Default `127.0.0.1` and `8080`. The Dockerfile sets `HOST=0.0.0.0` |
 | `WH_ROOT` | The `white-house/` folder. Default: two levels above `dist/` |
 
+### The Outreach room (prospecting)
+
+`POST /v1/rooms/salekh-ventures:outreach/run` runs one batch: find, analyse, score, shortlist. Nothing is sent to anyone. The result is one output, "Shortlist, <date>".
+
+Code does the searching and reading (through Agent Reach), the deduplication, the suppression check, Companies House, the filters, the score and the comparison with local competitors. A model is called at three fixed points only, one call at a time with no tools: `claude-haiku-5-5` to pick the real businesses out of the search results, `claude-haiku-5-5` to read one business's pages, and `claude-sonnet-5-5` to draft the card for each one that passed.
+
+| Variable | What |
+| --- | --- |
+| `AGENT_REACH_BIN` | Path to the Agent Reach binary, for example `~/.local/bin/agent-reach` written out in full. Unset: the find stage stops with "the search tool is not configured" |
+| `COMPANIES_HOUSE_API_KEY` | Companies House public data API key. Unset: every company is "not checked" and the run still goes ahead |
+
+Settings are config (`kind = 'setting'`, `key = 'outreach'`), changed by an owner through the UI's role: the kind of business, the territory, the list of places worked through a few each run, the front desk roles searched for in job adverts, how many businesses to look at (50), the filter rules and the score weights. The defaults and the meaning of each are in `src/outreach/settings.ts`; the score formula is at the top of `src/outreach/score.ts`.
+
+```sh
+# Counts per stage for a range of days (default: the last seven).
+npm run prospect-stats -- 2026-11-16 2026-11-23
+```
+
+Until the settings screen exists, an owner works the room from the command line. These connect with the UI's role only (`DATABASE_URL_UI`, `WH_TENANT_ID`, from the environment or `runner/.env`):
+
+```sh
+# Never to be contacted. Permanent: nothing can change or delete it.
+npm run suppress -- example-clinic.co.uk "asked not to be contacted"
+npm run suppress -- 01234567 "complaint"
+
+# Print the settings in force, or change them (each change is a new version of config).
+npm run outreach-settings
+npm run outreach-settings -- --areas-per-run 8 --batch-size 50
+npm run outreach-settings -- --exclude-group "Name of a group" --include-group "Name to take off the list"
+npm run outreach-settings -- --daily-at 08:00        # or: --daily-at off
+```
+
+### Living within the search tool's limits
+
+Agent Reach rate limits itself and may ask for a login. The pipeline reads its error codes and gives way:
+
+- `RATE_LIMITED`: that channel is not called again for the rest of the run, and one event records it with the wait the tool gave.
+- `NEED_LOGIN`: that source is left out of the run. Nobody's account is used, so this is "unavailable", not a fault.
+- Calls are spaced (`min_seconds_between_fetches`, 1.5) and capped per run (`max_fetches_per_run`, 300). A place's advert searches stop when two in a row bring nothing new.
+- A run begins with businesses found earlier and never analysed, and only then looks for new ones, up to the batch size.
+- A run cut short still ends in a shortlist from whatever was analysed, and its notes say it was cut short and how many businesses are waiting. It fails (`search_rate_limited`) only when there was nothing at all to work with.
+- A scheduled run that failed only on the rate limit is tried once more the same day, after the wait the tool gave (an hour if it gave none), then the scheduler gives up for the day.
+
+### The daily schedule
+
+A room whose schedule config carries `daily_at` (HH:MM, the tenant's time zone, Europe/London by default) is started by the runner itself once that time has passed, at most once a day. The runner looks every minute. Before starting, it writes a `scheduled` event for that room and day, which is what stops a restarted runner doing the day twice. If the run cannot start (kill switch, budget) a second event says why and the day is not tried again. Needs migration 0008.
+
 ### Other commands
 
 ```sh
@@ -90,6 +137,59 @@ DATABASE_URL_UI=... WH_TENANT_ID=... npm run budget -- salekh-ventures:research 
 # A department's eval cases against the real model. One model run per case: it costs money.
 ANTHROPIC_API_KEY_SALEKH=... npm run evals -- salekh-ventures data
 ```
+
+## Test enquiries by email
+
+The Outreach room can send one short test enquiry to a business, by email, from a test mailbox, after Salekh has approved that exact message. Nothing else is ever sent.
+
+```sh
+# runner/.env (never printed, read only by the runner process)
+TEST_MAILBOX_ADDRESS=...            # a Gmail address used for nothing else
+TEST_MAILBOX_APP_PASSWORD=...       # an app password for it
+
+npm run outreach-settings -- --enquiries-per-day 30 --allow-enquiries yes   # the day's allowance, and rung 1 to rung 2
+npm run outreach-settings                                                   # shows the allowance, the rung and the rules in force
+npm run prospect-stats -- 2026-11-16 2026-11-23                             # proposed, approved, rejected, sent, replied, scored
+```
+
+Without both mailbox variables no enquiry is drafted, sent or read, and the shortlist says so. Every ten minutes while the runner is up, and at the start of each run, the mailbox is searched for replies to the enquiries this system sent and for nothing else. The setting `test_enquiries: false` switches the whole thing off. The assumptions behind the estimated leak are in the `leak_assumptions` setting and are placeholders to edit.
+
+## Google Places
+
+`GOOGLE_PLACES_API_KEY` in `runner/.env` makes Places the main way to find businesses. Without it they are found by web search. Every call is a Text Search billed in the Enterprise tier (the field mask is in `src/control/connectors/places.ts`); `max_places_calls_per_run` (default 20) limits calls, and each run's output says how many were made.
+
+## Reading pages
+
+A business's own pages are read directly by the runner (`src/control/connectors/direct-read.ts`): public addresses only, robots.txt obeyed, bot checks left alone. Agent Reach `web read` is the fallback for pages that give almost no text. `DIRECT_READ=off` goes back to Agent Reach alone.
+
+## Kinds of business
+
+The Outreach room looks for several kinds of business (`business_types` in its settings): clinics, solicitors, financial advisers and mortgage brokers, estate and letting agents, accountants, and home improvement trades. Each has its own search phrases, groups, enquiry guidance, forbidden topics and leak assumptions (all placeholders until edited). Online shops are left out on purpose.
+
+```sh
+npm run outreach-settings                                   # lists every kind, on or off, with its rules
+npm run outreach-settings -- --enable-type solicitors       # or --disable-type id; "all" for every kind
+npm run outreach-settings -- --exclude-group "Name" --type solicitors
+npm run restore-filtered -- --since 2026-11-16              # businesses dropped before testing for want of a name or a confirmed company
+```
+
+Settings stored before there were several kinds keep working: clinics on, the rest off, until one is switched on.
+
+## Deploying
+
+See `DEPLOY.md`: the variables the service needs and the order to do things in. The container sets its own database up at start (`dist/start.js`, then the server as an ordinary user). `WH_ROLE=standby` makes a runner that starts no runs, sends nothing and does not read the mailbox: exactly one runner may be primary for a mailbox. `npm run export-config` prints the non-personal configuration to carry to another database.
+
+**Open risk: there is no tested backup of the server's database.** See the end of `DEPLOY.md`.
+
+## Before any deploy: check the schemas
+
+```sh
+npm run build && npm run check-schemas     # needs ANTHROPIC_API_KEY_SALEKH (environment or runner/.env); costs a fraction of a penny
+```
+
+It sends every structured-output schema the pipeline uses to the real API and prints pass or the API's own error for each. Tests never call the API, so this is the only thing that can tell you a schema will be refused. Run it after any change to a schema in `src/outreach/stages.ts`. It exits 1 if any fails.
+
+If analyses failed through a fault of ours, `npm run reset-attempts` sets the attempt count back for businesses still waiting, and `npm run reset-attempts -- --restore-failed-since YYYY-MM-DD` also puts back those set aside as `analysis_failed` since that day.
 
 ## Migrations
 
@@ -110,5 +210,11 @@ Plain SQL in `white-house/db/migrations/`, applied in name order, each once. A f
 | `src/control/` | The control layer: gateway, approvals, config, runs, events, connectors |
 | `src/control/connectors/posthog.ts` | Read only traffic totals |
 | `src/jobs/pull-traffic.ts` | Plain code: totals into `metrics` |
+| `src/outreach/pipeline.ts` | The prospecting pipeline, stage by stage |
+| `src/outreach/stages.ts` | The three single model calls and the code that checks their answers |
+| `src/outreach/store.ts` | The master list: dedupe, suppression, analysis, score, competitors, purge, numbers |
+| `src/outreach/score.ts`, `settings.ts`, `normalise.ts`, `extract.ts` | Filters and score, settings, dedupe keys, what code reads off a page |
+| `src/control/connectors/agent-reach.ts`, `companies-house.ts` | Search and page reading; the Companies House register |
+| `src/agents/model-caller.ts` | One structured model call (Anthropic SDK), and the scripted stand-in tests use |
 | `src/evals/` | Eval runner and its command line |
 | `src/seed.ts`, `src/set-budget.ts`, `src/migrate.ts` | Seed, budget and migration commands |

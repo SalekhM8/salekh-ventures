@@ -13,15 +13,30 @@
     "migrate": "node dist/migrate.js",
     "seed": "node dist/seed.js",
     "evals": "node dist/evals/cli.js",
-    "budget": "node dist/set-budget.js"
+    "budget": "node dist/set-budget.js",
+    "prospect-stats": "node dist/outreach/stats-cli.js",
+    "check-schemas": "node dist/check-schemas.js",
+    "export-config": "node dist/export-config.js",
+    "restore-filtered": "node dist/outreach/restore-filtered-cli.js",
+    "bootstrap": "node dist/bootstrap.js",
+    "reset-attempts": "node dist/outreach/reset-attempts-cli.js",
+    "suppress": "node dist/outreach/admin-cli.js suppress",
+    "outreach-settings": "node dist/outreach/admin-cli.js settings"
   },
   "devDependencies": {
+    "@types/mailparser": "3.9.0",
     "@types/node": "^22",
+    "@types/nodemailer": "8.0.2",
     "@types/pg": "^8.23.1",
     "typescript": "^5"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.322",
+    "@anthropic-ai/sdk": "1.8.0",
+    "htmlparser2": "10.1.0",
+    "imapflow": "2.12.1",
+    "mailparser": "3.14.5",
+    "nodemailer": "10.6.0",
     "pg": "^8.23.1",
     "zod": "^4.6.7"
   }

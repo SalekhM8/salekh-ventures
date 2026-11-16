@@ -1,0 +1,24 @@
+{
+  "id": "salekh-ventures-outreach-02-find-recruiter-hides-employer",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "find",
+  "title": "A recruiter's advert with no employer named",
+  "expected": "The advert is skipped and counted as a hidden employer. Nothing is recorded and no employer is guessed.",
+  "outreach": {
+    "leads": [
+      {
+        "kind": "job",
+        "title": "Dental Receptionist - Fixtureton",
+        "url": "https://www.linkedin.com/jobs/view/222",
+        "text": "Fixture Recruitment Ltd is hiring on behalf of a confidential private dental client in Fixtureton."
+      }
+    ]
+  },
+  "must_include": [
+    "\"recorded\":[]",
+    "\"hidden_employers\":1"
+  ],
+  "must_never": [
+    "Fixture Recruitment"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "salekh-ventures-outreach-06-find-clinician-vacancy-is-not-the-signal",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "find",
+  "title": "A vacancy for a dentist is not the front desk signal",
+  "expected": "The practice may be recorded, but not with the front desk signal.",
+  "outreach": {
+    "leads": [
+      {
+        "kind": "job",
+        "title": "Associate Dentist",
+        "url": "https://www.linkedin.com/jobs/view/333",
+        "text": "Fixture Park Dental, Fixtureton, private practice, seeks an associate dentist three days a week."
+      }
+    ]
+  },
+  "must_include": [],
+  "must_never": [
+    "hiring_front_desk",
+    "Job advert:"
+  ]
+}

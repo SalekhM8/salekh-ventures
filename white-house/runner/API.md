@@ -6,6 +6,8 @@ Every request carries `Authorization: Bearer <WH_API_TOKEN>`. Without it the ans
 
 Room ids are `<business>:<department>`, for example `salekh-ventures:data`. Business ids: `roots`, `mastore`, `twilight`, `salekh-ventures`. Department ids: `data`, `ads`, `creative`, `customer-relations`, `engineering`, `research`.
 
+> **Changed 16 Nov 2026 (deployment).** `GET /health` needs no token and answers `{"status":"ok"}` and nothing else. After ten requests with a wrong or missing token from one address in five minutes, further ones from that address are answered `429 {"error":"too_many_attempts"}` with a `Retry-After` header; a request with the right token is always let through. On a standby runner (`WH_ROLE=standby`), `POST /v1/rooms/:roomId/run` and a decision on an enquiry approval answer `409 {"reason":"standby"}`.
+
 ## GET /v1/house
 
 Everything the house needs to draw itself. The UI polls this (about every 1.5 seconds). Nothing in it may contain personal data: log text and task text are the fixed summaries from the event stream.
@@ -56,6 +58,31 @@ Body `{ "score": 1-10, "note": string? }`. A score under 9 without a note is ref
 ## POST /v1/approvals/:id
 
 Body `{ "decision": "approve" | "reject" }`. Recorded as the tenant's owner. On approve the gateway carries out exactly the stored payload. Answers `{ "status": "approved" | "rejected" | "expired" | "voided" | "refused", "reason": string? }`.
+
+> **Added 16 Nov 2026 (test enquiries).** For an approval whose action is `enquiry.send_email`, "approved" means the yes is recorded. The enquiry is then sent by the runner in turn, with a gap between sends (default 90 seconds) and within the day's allowance, so it may not have gone when this answers. `voided` with reason `payload_changed` means what would be sent is no longer what was shown: nothing is sent.
+
+## GET /v1/rooms/:roomId/approvals  (added 16 Nov 2026)
+
+The approvals waiting in one room, oldest first. Answers 404 for an unknown room.
+
+```json
+{ "approvals": [ {
+  "id": "uuid", "payloadHash": "64 hex characters", "expiresAt": "ISO time", "actionType": "enquiry.send_email",
+  "enquiry": { "business": "name", "town": "place or null", "purpose": "prospect | rival", "to": "address", "subject": "text", "body": "text" }
+} ] }
+```
+
+`enquiry` is present only for `enquiry.send_email` and is exactly the stored payload: what is shown is what a yes sends. **This endpoint returns personal data on purpose** (a business's name and email address, and the message). It is the only one that does. `GET /v1/house` still carries none: there the room shows `state: "waiting"` and a task line with a count only, for example `"12 enquiries waiting for your yes"`. Do not cache or log this response.
+
+## POST /v1/approvals/batch  (added 16 Nov 2026)
+
+Body `{ "decisions": [ { "id": "uuid", "decision": "approve" | "reject", "payloadHash": "as shown" } ] }`, 1 to 200 items. Each item goes through the same code as `POST /v1/approvals/:id`, one at a time, in the order given. Always answers 200 with one result per item, in the same order:
+
+```json
+{ "results": [ { "id": "uuid", "status": "approved | rejected | expired | voided | refused | not_found | invalid", "reason": "string, sometimes" } ] }
+```
+
+Send back the `payloadHash` that was shown: if it does not match, that item is `refused` with reason `payload_mismatch` and nothing is sent. A body that is not a list of 1 to 200 items answers 422.
 
 ## POST /v1/kill-switch
 

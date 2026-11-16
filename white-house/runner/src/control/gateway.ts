@@ -315,9 +315,9 @@ export function createGateway(options: GatewayOptions): Gateway {
           verified, verified === null ? null : now, JSON.stringify(verification),
         ],
       );
-      await emitEvent(tx, { ...base, now, type: "executed", summary: `${p.type.name} executed`, payload: { reference: result.reference, output: result.output ?? null } });
+      await emitEvent(tx, { ...base, now, type: "executed", summary: `${p.type.name} executed`, payload: p.type.privatePayload ? null : { reference: result.reference, output: result.output ?? null } });
       if (verified === true) {
-        await emitEvent(tx, { ...base, now, type: "verified", summary: `${p.type.name} was read back and confirmed`, payload: { observed: verification } });
+        await emitEvent(tx, { ...base, now, type: "verified", summary: `${p.type.name} was read back and confirmed`, payload: p.type.privatePayload ? null : { observed: verification } });
       }
       if (verified === false) {
         await emitEvent(tx, {
@@ -422,7 +422,10 @@ export function createGateway(options: GatewayOptions): Gateway {
         );
         await emitEvent(tx, {
           ...base, type: "refused", reasonCode: reason, rung, summary: `Refused: ${summary}`,
-          payload: { payload: req.payload ?? null, reason: req.reason, actionType: req.actionType, detail: detail ?? null },
+          // A payload that holds personal data stays out of the event stream: its hash stands in for it.
+          payload: type?.privatePayload
+            ? { payloadHash: hashPayload(req.payload ?? null), detail: reason === "invalid_payload" ? null : (detail ?? null) }
+            : { payload: req.payload ?? null, reason: req.reason, actionType: req.actionType, detail: detail ?? null },
         });
         return { outcome: "refused", reason, proposalId };
       };
@@ -464,7 +467,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       await emitEvent(tx, {
         ...base, type: "proposal", rung,
         summary: `${type.name} proposed at rung ${rung}${rung < configRung ? " (held there by its ceiling)" : ""}`,
-        payload: { payload, reason: req.reason, actionKey: req.actionKey },
+        payload: type.privatePayload ? { payloadHash: hashPayload(payload), actionKey: req.actionKey } : { payload, reason: req.reason, actionKey: req.actionKey },
       });
 
       if (rung === 1) return { outcome: "recommended", proposalId, rung: 1 };

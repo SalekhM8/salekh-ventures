@@ -41,6 +41,7 @@ export {
   actionTypes,
   createActionTypeRegistry,
   dummyAction,
+  enquiryAction,
   type ActionType,
   type ActionTypeRegistry,
   type CapRule,

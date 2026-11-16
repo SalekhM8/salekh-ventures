@@ -30,6 +30,12 @@ export interface ActionType<P = any> {
   undoable: boolean;
   /** The connector that carries it out. */
   connector: string;
+  /**
+   * True when the payload holds personal data (an address, a message). The gateway then keeps it out of the
+   * event stream altogether: events carry its hash, and the payload itself lives only in the approval and
+   * the audit row.
+   */
+  privatePayload?: boolean;
 }
 
 export interface ActionTypeRegistry {
@@ -71,5 +77,39 @@ export const dummyAction: ActionType<DummyPayload> = {
   connector: "dummy",
 };
 
+// ---------------------------------------------------------------------------
+// The test enquiry by email (mystery shop). The first action type that reaches
+// anyone outside the house.
+// ---------------------------------------------------------------------------
+
+const uuidText = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+
+export const enquiryPayload = z.strictObject({
+  /** The row in `enquiries` this is. The connector sends only what that row says. */
+  enquiry_id: uuidText,
+  prospect_id: uuidText,
+  to: z.string().email().max(254),
+  subject: z.string().min(1).max(200),
+  body: z.string().min(1).max(2000),
+});
+
+export type EnquiryPayload = z.infer<typeof enquiryPayload>;
+
+/**
+ * Send one short enquiry from the test mailbox to a business's published
+ * address. Hard ceiling: rung 3 (act and tell Salekh). It can never be
+ * silent. It cannot be undone: an email cannot be unsent.
+ */
+export const enquiryAction: ActionType<EnquiryPayload> = {
+  name: "enquiry.send_email",
+  payload: enquiryPayload,
+  maxRung: 3,
+  // One enquiry is one unit of the day's allowance.
+  cap: { key: "enquiries_per_day", window: "day", units: () => 1 },
+  undoable: false,
+  connector: "mail",
+  privatePayload: true,
+};
+
 /** The list the runner uses. */
-export const actionTypes: ActionTypeRegistry = createActionTypeRegistry([dummyAction]);
+export const actionTypes: ActionTypeRegistry = createActionTypeRegistry([dummyAction, enquiryAction]);

@@ -1,0 +1,40 @@
+{
+  "id": "salekh-ventures-outreach-01-find-both-routes",
+  "origin": "Synthetic, written 15 Nov 2026 before any real run existed. Every name, page and number is a fixture. Replace with real past cases as they arise.",
+  "stage": "find",
+  "title": "A job advert, a clinic's own site and an article",
+  "expected": "Records Fixture Smile Dental from the advert with the front desk signal and Fixture Glow Aesthetics from its own site. The article is not a business.",
+  "outreach": {
+    "leads": [
+      {
+        "kind": "job",
+        "title": "Receptionist",
+        "url": "https://www.linkedin.com/jobs/view/111",
+        "text": "Fixture Smile Dental, Fixtureton. Private dental practice seeks a full time receptionist."
+      },
+      {
+        "kind": "search",
+        "title": "Fixture Glow Aesthetics | Skin clinic in Fixtureton",
+        "url": "https://fixture-glow.example.test/",
+        "text": "Private aesthetics clinic in Fixtureton offering skin treatments."
+      },
+      {
+        "kind": "search",
+        "title": "Ten best dentists in Fixtureton",
+        "url": "https://news.example.test/ten-best",
+        "text": "Our round up of ten dental practices in Fixtureton."
+      }
+    ]
+  },
+  "must_include": [
+    "Fixture Smile Dental",
+    "hiring_front_desk",
+    "Job advert: Receptionist",
+    "Fixture Glow Aesthetics",
+    "https://fixture-glow.example.test/"
+  ],
+  "must_never": [
+    "Ten best",
+    "news.example.test"
+  ]
+}

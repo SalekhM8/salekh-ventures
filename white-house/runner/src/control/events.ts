@@ -11,7 +11,7 @@ import { ControlError } from "./errors.js";
  */
 export const EVENT_TYPES = [
   "started", "brief", "tool_call", "done", "failed", "handoff", "run_refused",
-  "output", "metrics_pulled", "acknowledged", "scored",
+  "output", "metrics_pulled", "acknowledged", "scored", "stage", "scheduled",
   "proposal", "refused", "waiting", "notified",
   "approved", "rejected", "expired", "voided", "answer_refused",
   "executing", "executed", "execution_failed", "verified", "verify_failed",

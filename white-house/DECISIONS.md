@@ -441,3 +441,354 @@ Salekh asked for "the 55 agents". No such list existed in the build, so one was 
 - House: a room's panel lists the agents that room can hold. Running several real agents in one room comes as each is built.
 - Only two of the 55 are built (Data: Daily Read, Research: Market Report). The page words them as jobs an agent is built and trained for, not as things already running.
 - Each one still needs, before it is real: a written job, the business's facts, access to the right system, test cases and a scorecard. Outreach also needs Salekh's tactics and his rule on what it may send unseen.
+
+---
+
+## Prospecting pipeline (Outreach room): build decisions, 15 Nov 2026
+
+Made by the build agent. **Build** status unless marked **Open**. Smallest version that produces a daily shortlist: find, analyse, score, shortlist. **Nothing is sent to anyone**: no sending code exists and no sending action type is registered. The mystery enquiry, follow ups and replies (steps 3, 6 and 7 of Salekh's brief) are not built. Not run against the real model by the build agent. 178 tests pass, all with a scripted model and a stubbed search tool.
+
+### O1. Code fetches and decides; a model only reads and drafts (changed mid-build)
+
+The first design gave an agent web search and fetch in a tool loop. On Salekh's point about cost it was replaced before it was finished: fetching is plain code through Agent Reach, and a model is called at three fixed points, one call each, with a fixed input, a structured answer, no tools and no web access.
+
+| Point | Model | What it does | What code does around it |
+| --- | --- | --- | --- |
+| Find | `claude-haiku-5-5`, up to 25 results a call | Says which search results and job adverts are real businesses of the right kind, and which signal each shows | Runs the searches, drops what is already known or suppressed before asking, finds the employer's own site, deduplicates, records |
+| Analyse | `claude-haiku-5-5`, one call a business | Reads up to four of the business's own pages and fills the analysis, giving a page number for each fact | Fetches the pages, reads contact routes, company number and postcode off them itself, checks every answer against its page, asks Companies House |
+| Draft | `claude-sonnet-5-5`, one call a business that passed | Writes why it made the list, a sample reply, a first message and a call opener | Filters, scores, builds the competitor comparison, checks the draft against written rules and sends it back once if it fails |
+
+These calls use the Anthropic TypeScript SDK (`@anthropic-ai/sdk`, pinned 1.8.0, already present as a dependency of the Agent SDK) with structured outputs (`messages.parse`, `output_config.format`), behind a small interface so tests use a scripted stand-in. The Agent SDK is not used by this room. The model never supplies an address: it refers to a result or a page by number and code supplies the address.
+
+Reworked because of the change: the three agent tools, the per-prospect agent runs, the agent's web allow list for this room and the first version of the pipeline tests were dropped; the store, the dedupe keys, the filters and score, and the Companies House connector carried over.
+
+### O2. Agent Reach, and only four of its actions
+
+`AGENT_REACH_BIN` gives the binary. The connector runs `web search`, `web read`, `linkedin jobs` and `linkedin read` and nothing else: its instagram, facebook, twitter and reddit channels cannot be reached from the code. Each call has a timeout, takes its arguments as a list (never a shell string), and keeps at most 6,000 characters of a page and 1,500 of a search result. A LinkedIn profile address is refused before the tool is run, a LinkedIn address is never read through the plain web channel, and anything `linkedin jobs` returns that is not an advert's own page is dropped. Unset: the find stage stops with "the search tool is not configured". A real `linkedin jobs` call was made once by hand to see the shape of its answer: it works without a login and returns the advert text, which names the employer.
+
+Fetched pages are cached in the database for the day (`fetched_pages`) and deleted after a day. It is the one table a role may delete from, because it is a cache of public pages and should not be kept.
+
+### O3. Two routes into the master list, one dedupe
+
+Route one starts from public job adverts for the front desk roles in settings (receptionist, front of house, patient coordinator, treatment coordinator, practice administrator), through `linkedin jobs` for each place and one web search for adverts elsewhere. Route two starts from the kind of business and the place. Both end at the same `recordProspect`. A business found by route two that also has an advert gets the signal added to its row, matched by the same keys. An advert's evidence is written by code: its title, its address and the date seen. An advert from a recruiter that hides the employer is skipped and counted, with a fixed event. A source that fails, refuses or times out is skipped with a fixed event and not retried.
+
+**Limits, plainly.** From an advert the employer's own site is found by one search and taken only when the site's address carries a word of the employer's name; otherwise that advert leads nowhere. Adverts can be old (the one seen by hand was five months old): the card shows the date seen, not the date posted. **Meta adverts and weak social accounts cannot be seen**: there is no source for them in this version (Agent Reach's social channels are excluded and the Meta Ad Library is not reachable), so in practice the signals found will be front desk adverts and whatever a result or a business's own pages say. `runs_ads` is always "not found" and the card says so.
+
+### O4. One row per business, decided by code
+
+Keys: the website's host (no scheme, no www; a page on a shared platform such as Facebook is not a key), the Companies House number, a hash of the normalised name and postcode, and a near match of names at one postcode (the same once generic words such as "dental" or "clinic" are removed). Unique indexes in the database hold the first three whatever the code does. A prospect needs its own website or a name with a postcode, or it cannot be recorded. Learning a company number during analysis can reveal a duplicate, which is then set aside as `duplicate`.
+
+### O5. Suppressions are permanent
+
+`suppressions` has no update or delete grant for any role, and a trigger refuses update, delete and truncate even from a superuser. Checked when a business is recorded and again when it is scored. Suppressing by email or phone is stored but nothing reads those two kinds yet (nothing sends).
+
+### O6. Personal data
+
+A named owner or manager and the contact routes live in `prospects` and in the finished shortlist a person reads. They are never written to `events`: stage lines are fixed templates with numbers only, no brief or model input is stored for this room, and a failed stage records a fixed code, not the error's text. Agent tools have no access to the prospecting tables. A person's name is kept only when the page it is said to come from contains it, and only from the business's own pages or the Companies House register (directors are public). Prospects filtered out are purged after 90 days: name, site, analysis, signals and contact details go; the keys that stop it being found again stay. Open: `purgeProspects` and `purgeFetchedPages` exist but nothing schedules them. The page cache can hold whatever a public page says, including a testimonial; it is kept one day.
+
+### O7. Filters and score (rules before models)
+
+Filters, in order, first failure recorded: not analysed; not a limited company (Companies House, or the business says sole trader or partnership); no signal; no named contact; limited company not confirmed; no contact route; no sign of money (a high value service, several staff, or two or more locations). Each can be switched off in settings.
+
+Score out of 100: **signals** 25 front desk advert, 15 Meta adverts, 10 weak social, 10 poor reviews, at most 45; **money** 10 high value service, 10 adverts seen running, 10 for five or more staff or 5 for three or four, 5 for two or more locations, at most 30; **reach** 5 a named contact plus each kind of route once (WhatsApp 4, Instagram 3, phone 3, Facebook 2, form 1, email 1, booking 1), routes at most 10; **limited company confirmed** 10; **reply speed** nothing, not tested. Weights are settings.
+
+**Not as the brief has it:** "replied slowly or not at all" cannot be judged without the test, so it is neither filtered on nor scored, and every card says "Not tested yet". **With no Companies House key** a business is "not checked" and is kept, flagged on its card (a setting can make that a refusal). "Poor reviews" has no lead agent in the strategy's table: it is set to Enquiries as a placeholder. **Open: Salekh to confirm.**
+
+### O8. England, a few places a run
+
+The territory is England. A list of 40 English cities and large towns is in settings (editable, a starting spread, not a considered list). Each run takes the next three, never searched first, then longest ago, and records it in `search_coverage`.
+
+### O9. Competitors
+
+For each shortlisted business the card compares it with up to three other businesses of the same kind already on the master list and found for the same place, same postcode district first. The comparison is written by code as facts with sources: reviews, ways to enquire, a front desk advert, opening hours, each "not found" where unknown, and "Not tested yet" for reply time. Links are stored in `prospect_competitors` with room for the later test comparison; a tested business keeps its result on its own row, so one competitor serves several prospects. **Limit:** competitors are only those the searches happened to find and analyse, not a deliberate search for the nearest three, so early cards may have none.
+
+### O10. No email outreach
+
+The first message is a short direct message for Salekh to send by hand or say on a call. Code refuses a draft that reads like an email, claims a test, quotes a number or a result, or uses hype, and asks once more. The card names the best route and why (WhatsApp, then Instagram, then phone, then Facebook, then a form) and never suggests email. Because he no longer emails prospects, the "limited companies only for cold email" rule guards nothing sent today; the filter is kept because the brief asks for limited companies.
+
+### O11. Runs, budget, kill switch, cost
+
+Each stage is one row in `runs` with the tokens and estimated cost of all its model calls. The kill switch and budget are checked before each stage by the phase 1 code, and again before every model call inside a stage. A stop leaves everything recorded; the next run picks up unanalysed prospects. Cost is tokens times list prices (an estimate; Haiku 5.5's higher rate above 100,000 prompt tokens is modelled and every prompt is kept far below it). Each shortlist records per-stage calls, tokens and cost, and cost per business looked at and per business shortlisted. The seeded daily budget for this room is **£2, a placeholder** with no basis in section 14.
+
+### O12. Not followed from the SDK guidance, on purpose
+
+The current guidance for `claude-sonnet-5-5` is to enable a server-side fallback model for refusals. It is not enabled: the brief pins each model by exact id, and a silent change of model would change cost and behaviour. A refusal is recorded as a failed draft and the business is held for the next run.
+
+### O13. Changes to earlier work
+
+- Migration 0007: `prospects`, `prospect_events`, `suppressions`, `prospect_competitors`, `search_coverage`, `fetched_pages`; a `setting` kind of config; a `stage` event type; `outputs.data`.
+- `/v1/house`: a room is `working` while a pipeline is between stages, and its task line is the latest stage line. No change of shape.
+- The agent session's hook now refuses LinkedIn profile addresses for every department (Research included).
+- Seed: Outreach added to the Salekh Ventures floor, live, with its settings and placeholder budget.
+- Earlier tests updated where they count tables, migrations and seeded rows.
+
+### Not done
+
+- Steps 3, 6 and 7 of the brief. No sending of any kind.
+- No scheduler: a run starts from the API. "By 9am" needs one.
+- Reviews and Google Maps: only a count and rating a business states on its own pages. No listing site is read.
+- Purges are not scheduled. No API to add a suppression or edit settings (functions exist; the UI does not).
+- Evals: 14 synthetic cases for this room, each testing one model call. None run against the real model.
+
+---
+
+## Prospecting, second round after the first real run: build decisions, 15 Nov 2026
+
+Made by the build agent after the coordinator's first real run (50 found, 44 analysed, 2 shortlisted, £0.09). **Build** status unless marked **Open**. Not run against the real model by the build agent. 189 tests pass. Migration 0008 is new and has not been applied to `wh_dev` by the build agent.
+
+### Q1. Groups and chains are left out
+
+Salekh sells to owner-run clinics. A business is treated as part of a group when any of these holds: its own pages say so (a new analysis field, with the page, "not found" allowed); its name, website or registered company names a group on the settings list `excluded_groups`; or it shows ten or more premises (`chain_locations`). It is filtered out with the reason `part_of_group`, checked first of all the filters. A group on the list is set aside as soon as it is found, before any analysis is spent on it. A group is never offered as a local competitor. An owner with two or three sites is not a group, and the model is told so.
+
+The list is seeded with six groups, each checked on 15 Nov 2026 on its own website as describing itself as a group or network: PortmanDentex, Rodericks Dental Partners, mydentist, Colosseum Dental, Thérapie Clinic, Riverdale Healthcare. **Not on the list because their sites could not be read that day:** Bupa Dental Care, Together Dental, Laser Clinics UK. Salekh adds any others with `npm run outreach-settings -- --exclude-group "..."`.
+
+### Q2. Job adverts are the main way in
+
+- Eight places a run by default (was three), 25 advert results per role per place (the tool's cap), and every advert search for every place is run before the searches by kind and place.
+- Search results are asked about adverts first, and prospects found from a front desk advert are analysed first; the others fill what is left of the batch. Businesses found by kind and place are still recorded and analysed: they are the competitor pool.
+- **An advert's age is read by code** from words such as "3 weeks ago". Older than `advert_max_age_days` (60) it is not a signal; the business is still recorded. An advert that does not show its age still counts, and its evidence line says the age is not shown. The age shown is kept with the signal.
+- A run may make at most `max_fetches_per_run` (600) searches and page reads. Past that a call fails like any refused source and the run carries on. Every shortlist reports how many were made, how many came from the cache and how many were not made.
+- "No named contact" is still a filter. Each run also counts how many failed **only** for want of a named person while no Companies House key was set, so the worth of the key can be seen.
+
+### Q3. The comparison is one table
+
+Per card: a Markdown table with a row for each fact (reviews, ways to enquire, front desk advert, opening hours, reply time) and a column for the prospect and up to three competitors, "not found" where unknown, sources numbered and listed once beneath. Then only the differences that go against the prospect, each a sentence of fact written by code: a route a competitor publishes that was not found for the prospect, a higher review rating, opening hours published where the prospect's were not found. If none goes against it, the card says so. The drafting model is given only those sentences.
+
+### Q4. A daily schedule inside the runner
+
+The room's `schedule` config (which already holds the live flag) may carry `daily_at`, read in the tenant's time zone. The runner looks every minute and, once the time has passed, starts the room through the same call the API uses, so the kill switch, budget and every other check are the same. Before starting it writes a `scheduled` event for that room and day under a lock; a restarted runner finds it and leaves the day alone. A run that cannot start is recorded as skipped with a fixed reason and is **not** tried again that day. A runner that only comes up after the time still does the day's run. Seeded: Outreach at 08:00, nothing else. If the event cannot be written (migration 0008 missing) nothing is started.
+
+**Not proven by a test:** two runners looking at exactly the same moment are kept to one run by the lock. The test for it passes with the lock removed, because the two did not interleave, so the lock rests on reasoning, not on a failing test.
+
+### Q5. From the command line, as the UI's role
+
+`npm run suppress -- <website or company number> "<reason>"` and `npm run outreach-settings` (print; `--areas-per-run`, `--batch-size`, `--exclude-group`, `--include-group`, `--daily-at HH:MM|off`). Each change is a new version of config against the tenant's owner. A reason is required for a suppression and kept with it.
+
+### Q6. Recruiters' adverts that hide the employer
+
+One attempt, by code, to tie the advert to a business already on the list for that place: a full postcode in the advert that exactly one business has, or a postcode district with exactly one business on the list. A match is stored on that business as an **unconfirmed** signal, shown on a card as "possible signal, not counted", and left out of the filters, the score and the choice of lead agent. **Limit:** a business's postcode is only known once it has been analysed, so in practice this attaches to businesses analysed on an earlier run. Most such adverts give no postcode and are still skipped and counted.
+
+### What changed in the filters and the score
+
+- New filter, first in the order: `part_of_group`.
+- Signals that count are confirmed ones only; an advert older than 60 days is not one.
+- The score formula and weights are unchanged from the first round (route weights were already changed there for direct messages).
+- Analysis order and search order changed; batch size is still 50.
+
+### Could not do
+
+- A posted date is only what the advert's own text says ("N weeks ago"). No absolute date is captured, and adverts found through web search rarely show an age.
+- "Ads posted by recruitment agencies" are matched by postcode only. Matching on the description (services, opening days) was not attempted: it would be a guess.
+- The three large groups named above could not be verified, so they are not seeded.
+
+---
+
+## Prospecting, third round: living within the search tool's limits, 15 Nov 2026
+
+Made by the build agent after the second real run failed with every source refused. The cause was Agent Reach limiting itself (`RATE_LIMITED`, with a wait of about 40 minutes) and its job advert source asking for a login (`NEED_LOGIN`). **Build** status. No schema change, so no new migration. The real tool was called twice by hand, once per channel, to read the two error shapes. 198 tests pass, all with the stubbed tool returning those shapes.
+
+### T1. The tool's error codes are read
+
+The connector now reads the tool's JSON even when it exits with an error. `RATE_LIMITED` becomes a rate limit with the wait taken from its hint ("Wait 2501 seconds..."), `NEED_LOGIN` becomes "this source is unavailable", anything else is a plain failure. Salekh will not sign a personal account in, so a login request is not a fault to fix.
+
+### T2. A limited channel is left alone for the rest of the run
+
+The tool has two channels here: web (search and read) and LinkedIn (job adverts). The first time one reports a rate limit or asks for a login, it is not called again in that run, and one fixed event records it, with the number of seconds when the tool gave one. The second real run made 64 calls into a limit; the same situation now makes one call per channel.
+
+### T3. Degrade, do not fail
+
+- Whatever the find stage got before a limit is used.
+- If the limit arrives during analysis, the businesses not reached stay as found, with no failed attempt against them, and the run goes on to score and draft what was analysed.
+- The run fails, with the fixed reason `search_rate_limited`, only when nothing was found, nothing was waiting and nothing was analysed.
+- The shortlist's notes open with a plain line when the run was cut short, why, the wait given, and how many businesses are waiting.
+
+### T4. Backlog first
+
+A run now begins by analysing businesses found on earlier runs and never analysed (advert-led ones first), and only then looks for new ones, up to what is left of the batch size. If the backlog fills the batch, nothing new is looked for and no searches are spent. The first run row of a pipeline is therefore `outreach:analyse` when anything is waiting, and `outreach:find` otherwise.
+
+### T5. Pacing
+
+A minimum gap between calls to the tool (`min_seconds_between_fetches`, default 1.5 seconds) and the per-run limit lowered from 600 to 300. Advert searches run with the roles in the order of the settings list (receptionist first), and a place's advert searches stop when two in a row bring nothing new. At 1.5 seconds a run of 300 calls takes at least seven and a half minutes on fetching alone. **Not known:** what the tool's real limits are. 274 calls in one run were accepted and the next run 12 minutes later was refused, so 300 a run with a gap is a guess at staying inside them, not a measured figure.
+
+### T6. One retry by the scheduler
+
+A scheduled run that failed with `search_rate_limited` is tried once more the same day, after the wait the tool gave (60 minutes if none). The mark that the retry has been used is written before the retry starts, so a restart cannot repeat it. If the second try fails for any reason the scheduler records that it has given up for the day. A run that failed for any other reason is not retried.
+
+### Could not do
+
+- The tool's limits are not documented in what it prints, so the pacing cannot be proved sufficient. If runs are still limited, lower `areas_per_run` or `max_fetches_per_run`, or raise the gap.
+- With the advert source asking for a login, route one depends on web search for adverts on other boards, which showed fewer and less clearly dated adverts on the first run. Until that source is available again, expect fewer advert-led businesses.
+
+## Prospecting, fourth round: the test enquiry by email and the capture score, 16 Nov 2026
+
+Salekh's decisions, as given: email only; sent from a test mailbox he owns and signed with his first name; he approves every enquiry in week one; one enquiry per business ever; no booking, no health details, nothing false about who is asking; no follow up and no reply from the test mailbox; wait 24 hours before scoring. Two additions arrived during the build: an estimated monthly leak shown as a range with its workings, and rivals tested only for a business that has itself scored low.
+
+### E1. One sending action, and where each rule is held
+
+`enquiry.send_email` is the second action type on the closed list. Highest rung ever 3, cap `enquiries_per_day`, not undoable, connector `mail`. Its payload is the enquiry id, the prospect id, the address, the subject and the body. Because that is personal data, the gateway's events for this action carry the payload's hash and not the payload (`privatePayload`), and the reason given is a fixed line.
+
+- **One enquiry per business, ever**: two unique indexes on `enquiries` (per business, per address), which only a rejected or expired enquiry leaves room in. The connector also claims the row as `sending` before it sends, so a second attempt has nothing to send. A send that fails after the claim is marked `failed` and is never retried, because it may have gone.
+- **Nothing without his yes**: rung 2 through the normal gateway path (payload hash, 24 hour expiry, single use). The connector sends only when the stored enquiry equals the approved payload, and the gateway's role cannot update the address, subject or body.
+- **Suppressed businesses**: refused when proposed and checked again in the moment before sending.
+- **The credentials**: `TEST_MAILBOX_ADDRESS` and `TEST_MAILBOX_APP_PASSWORD` are read in `index.ts` and handed to the mail connector only. No agent, model call or event sees them.
+
+### E2. Reading replies is narrow by construction
+
+The mailbox connector asks the mail server to search for messages whose In-Reply-To or References header names an enquiry's Message-ID, or that come from the address written to, or from the business's own domain when the address is on that domain. Only the messages those searches return are fetched. A shared mail provider's domain never counts, only the exact address. Nothing is replied to, moved, flagged or deleted. Reply text is stored in `prospects.test_result` and nowhere else, with the same purge as the rest of a prospect.
+
+Automatic or a person: headers first (`Auto-Submitted`, `X-Autoreply`, `Precedence`, an "automatic reply" subject). When they do not settle it, one cheap model call reads the reply. The same call says whether the question was answered and a next step offered, and a "yes" counts only when the sentence it quotes is really in the reply. An opt-out, by plain words or by that reading, adds a suppression for the address (and the domain when it is the business's own) at once.
+
+### E3. The capture score
+
+Out of 100, six parts: reply speed 50 (15 minutes 50, 1 hour 42, 4 hours 32, later the same day 22, within 24 hours 12, none 0), reply quality 20 (answered 12, next step 8), follow up 10, routes 20 (4 per kind up to three, 8 if one works out of hours), reviews answered and social activity not measured. Unmeasured parts are left out and the score is scaled over the rest; the card always says "measured on N of M parts". All weights are in the `capture_weights` setting. The earlier score is now called fit.
+
+"Same working day" is implemented as the same calendar day in the tenant's time zone. Opening hours are not reliable enough to use.
+
+### E4. The shortlist rule, and businesses that cannot be emailed
+
+Tested: capture at or below `capture_threshold` (50) and the fit filters, with no signal asked for (the test is the signal). A fast, good replier is filtered out as `captures_well` and kept as a comparison. A business that opted out is filtered out as `opted_out`.
+
+Not testable by email (no address published, or Salekh rejected its enquiry): no capture score. It is shortlisted only on the rule in force before tests, which is fit plus a confirmed signal, and its card says why it has no capture score. This is a choice the brief did not make; the alternative is never to shortlist such a business.
+
+### E5. The estimated leak
+
+`price x enquiries a month x share lost to a slow reply x share that would have bought`, low and high. The price is kept only when the business's own page shows that number, with the page as its source. The other three are in `leak_assumptions`, seeded as cautious placeholders (20 to 60 enquiries, 10% to 30%, 10% to 25%). **They come from no study and no benchmark and are Salekh's to edit.** No published price, or a person replied within four hours: no figure, and the card says why. `min_estimated_leak` (5,000 pounds, on the high end) applies only when an estimate exists. The drafting model is never given the estimate, and code refuses any first message with a pound sign or a percentage in it.
+
+### E6. Rivals
+
+A business that passes fit and publishes an email is tested as a possible client in its own right, whoever its neighbours are. So "rivals" tested later are the local competitors that are not themselves candidates (they failed a fit filter) and publish an email: up to the three already linked to the prospect, once each, each needing approval. The prospect's card goes out as soon as its own result is in, marked "rivals not tested yet" when any rival's result is still to come, and is issued again when they are in. A rival's result is stored and reused for every prospect it is compared with.
+
+### E7. Sending
+
+Approving an enquiry records the yes; a single sender then works through approved enquiries one at a time, oldest first, with `enquiry_send_gap_seconds` (90) between them. It stops at the kill switch, the day's cap or the budget and picks up on the next ten minute round. The pipeline never proposes more than the day's allowance, so overflow waits unproposed for the next day rather than holding an approval that would expire.
+
+### Could not do, or not as written
+
+- The real mailbox connector (`connectors/mailbox.ts`) has not been run against a mail server by this build: tests use a mailbox in memory, as instructed. The narrowness of reading rests on that file's search calls and should be watched on the first real batch.
+- "Same working day" is the same calendar day (E3).
+- Whether the enquiry's content is "false about who is asking" is checked by fixed patterns (patient claims, booking requests, health words, links). A draft could still invent a circumstance no pattern knows. Salekh's approval of every enquiry is the real check.
+- An approval lasts 24 hours. An enquiry approved but held by the kill switch for longer than that expires and is not sent; the business can be proposed again.
+- A reply that arrives after scoring is stored (for three days) but does not change a score already given.
+
+### E8. Google Places is the main way to find businesses (added the same day)
+
+Places API (New), Text Search only, by plain code on the gateway side (`connectors/places.ts`). The key is read in `index.ts` and travels in a header. No key: the pipeline finds businesses by web search as before, and the shortlist says so.
+
+- **One field mask, in one place**: id, displayName, formattedAddress, postalAddress, location, businessStatus, websiteUri, nationalPhoneNumber, rating, userRatingCount, regularOpeningHours (periods and weekdayDescriptions), and nextPageToken. By Google's data fields table (read 16 Nov 2026) the dearest of these is in the Enterprise tier, so every call is billed as **Text Search Enterprise**. Up to three pages (60 results) per place.
+- **Reviews**: the rating and the count come from Places with the place as the source, and replace whatever a business's own page claims. **"Reviews answered" stays not measured.** The Review object in Places API (New) has no field for an owner's reply, so the API cannot say whether a business answers its reviews. Asking for `reviews` would also move every call to the Enterprise + Atmosphere tier. So reviews are not fetched at all, Place Details is never called, and no review text or reviewer's name is stored anywhere.
+- **Dedupe**: the place id is one more unique key on `prospects`. A business found earlier another way gains its place id when Places returns it.
+- **No website**: recorded (so it is not found again) and set aside as `no_website`. It cannot be analysed or tested by email, and the shortlist says how many.
+- **Order of finding**: job adverts first (a bonus signal), then Places fills the batch for each place in the day's rotation. The web search for "business type in place" is no longer made when Places is configured; Agent Reach reads each business's own pages and looks for adverts.
+- **Rivals**: when a business scores low and has a location from Places, one Text Search ranked by distance round it (setting `rival_search_radius_metres`, 5000) gives its nearest three of the same kind that are open and have a website. They go on the master list like any other business, are analysed on the next run, and are then put forward for the same enquiry. Its card says "rivals not tested yet" until then. A business with no Places location falls back to the master list as before.
+- **Opening hours**: the card's evidence says whether the test enquiry was sent while the business was open or closed, by the hours Google shows. **The points for "a route that works out of hours" are unchanged**: no rule was given for turning opening hours into points, and inventing one would be a guess. This needs a decision.
+- **Limit**: `max_places_calls_per_run` (20). Calls made, calls not made at the limit and failures are on the run's output with the price tier. The Places cost is not in the model cost figure.
+
+### E9. LinkedIn job adverts: national search, place matched in code, a pause is respected (added the same day)
+
+`agent-reach linkedin jobs` is now run without `--location`, which the source answers with an error followed by a pause. One national search per query is kept for ten minutes and each advert is offered only for a place its own location names. An advert's facts are read from the `raw` record of the tool's answer (`company`, `location`, `listed`), because its `text` is empty. `UPSTREAM_BROKEN` with a `retry_after_seconds` is a new state, "paused": the channel is left alone for the rest of the run, with one fixed event and a line in the shortlist. Without a stated wait it is an ordinary failed search. Putting the place in the query text was tried once against the real tool and does not narrow the results, so it is not relied on.
+
+### E10. The search tool's limits are per action, and searching is never essential when Places is configured (added after the first real runs)
+
+Two real runs produced nothing: `web search` was rate limited, the whole tool was marked limited for the run, and 43 businesses that needed only page reads were left. Fixed:
+
+- **Per action.** `web search`, `web read`, `linkedin jobs` and `linkedin read` are tracked separately. One going down never stops another, nor Places, nor the mailbox.
+- **Order of a run**: collect replies; score what is 24 hours old (code only, now done before anything that can be limited); analyse the backlog (page reads); find with Places; analyse; propose enquiries; then, last and optional, the job advert searches; then the cards. Without Places the advert and web searches stay at the front, because they are then the only way to find anything.
+- **Inside analysis** the one web search (for a site's other pages) already degraded to the home page alone. An advert naming a business that is already on the list for that place now takes its website from the list, so no search is needed to tie the two.
+- **A short wait is honoured**: a rate limit with a stated wait of 30 seconds or less is waited out and the call made once more. A longer wait, no stated wait, or a second refusal gives up on that action for the run.
+- **"Cut short" means page reads were limited** (or the run reached its own limit on calls). A limit on searching is said in a plain line and the run carries on.
+- Up to ten new businesses named in adverts are recorded by the late advert stage, to be read on the next run.
+
+### E11. Pages are read directly; the search tool's reader is only a fallback (added after web read was limited too)
+
+With `web read` rate limited as well, nothing could be analysed. Reading a business's own pages no longer depends on anybody's allowance: `connectors/direct-read.ts` fetches them by plain code, and Agent Reach `web read` is asked only when a direct read fails for an ordinary reason or returns almost no text (under 200 characters, which usually means a site drawn by JavaScript).
+
+- **What it will connect to**: http and https, ports 80 and 443, public addresses only. Private, loopback, link-local, carrier, documentation and multicast ranges are refused, for IPv4 and IPv6, on the first request and on every redirect (5 at most). **It uses node:http, not fetch**, so the check sits in the socket's own lookup: the address checked is the address connected to, and a name that resolves differently a moment later gets nowhere. fetch offers no way to pin that without another dependency.
+- **Limits**: 15 seconds for the whole request, 2 MB, text/html and text/plain only. The User-Agent is `business-page-reader/1.0 (reads a business's own public pages; obeys robots.txt)`: a generic name, no personal details, not a browser's.
+- **robots.txt** is fetched once per host per day (kept in the existing page cache) and obeyed for both readers. A group naming our agent applies if there is one, otherwise `*`; the longest rule wins. No file: nothing is disallowed. A server error on robots.txt is not a yes: the site is not read.
+- **A bot check, a login or a refusal** (401, 403, 429, a challenge header, or a 200/503 with challenge markers and little text) is recorded as blocked, once. **The fallback reader is never used to get round a no**: disallowed, blocked, a refused address and a non-page all stop there.
+- Businesses not read are set aside as `not_read_disallowed` or `not_read_blocked` and the shortlist says how many.
+- **HTML to text** with `htmlparser2` (already in the tree under mailparser, now declared): scripts, styles and the menu's words go; headings, linked email addresses and phone numbers, JSON-LD, links to other sites (booking, WhatsApp, social) and, last, the page's links to its own site with full addresses are kept.
+- **A site's other pages** come from the home page's own links, topped up from `/sitemap.xml` when fewer than two of contact, about or team, and treatments or prices are found. No web search is made for them when the direct reader is on.
+- **Limits per action**: `direct read` is its own action. With it on, a limit on `web read` or `web search` never cuts a run short. A business that needed the fallback while it was limited is left as found, with nothing against it, and the run carries on. "Cut short" now means only that the run reached its own limit on calls (or, with `DIRECT_READ=off`, that the outside reader was limited, as before).
+- The per-run fetch cap, the gap between calls (plus 2 seconds per host), the page limit per business (4) and the daily cache all apply unchanged. Page text is untrusted data in prompts exactly as before.
+
+### E12. The analysis schema that the API would not compile, and no more silent failure (added after the first real analysis run)
+
+Every analysis call failed with `400 invalid_request_error: The compiled grammar is too large`. Round 4 had added one more nullable field to a schema already built of nullable pairs, and the pipeline recorded only a fixed code, so it looked like 49 quiet failures.
+
+- **The schema is flat and has no nulls.** "Not said" is `""` or `0` with page `0`; the legal form has a `not_stated` value. Nothing is optional and there is no union. Emails, phones, routes, links, the company number and the postcode were already read by code and are not in the schema. Everything the capture score, the leak estimate (service, published price, page) and enquiry drafting need is still there. It did not need splitting into two calls.
+- **`npm run check-schemas`** sends each stage's schema (find, analyse, enquiry, reply, draft) to the real API with a one line prompt and 16 tokens, and prints pass or the API's error. Tests cannot see this fault, because they never call the API: this command is the check, and it is a step before any deploy.
+- **A refused request is never silent.** For a 4xx other than 408 and 429 the model caller keeps the API's error type and the first 300 characters of its message (never the request body). The pipeline writes an event with reason code `model_request_error` and that detail, does not count it against the business (no failed attempt), and after three identical refusals in a row stops the stage: analysis and card drafting fail the run with the line "Analysis stopped: the model refused the request: <type>"; enquiry drafting stops and says so at the top of the shortlist.
+- **Calls that failed are not presented as work.** A stage's `model_calls` counts answered calls; `failed_calls` is shown beside it when there are any.
+- **`npm run reset-attempts`** sets `analysis_attempts` back to nought for businesses still in stage `found`. With `--restore-failed-since YYYY-MM-DD` it also puts back to `found` those set aside as `analysis_failed` since that day, with a `restored_after_request_error` line on each one's record.
+
+## Deployment: the runner on a server with no shell, 16 Nov 2026
+
+### D1. The database is set up by the container at start
+
+The server's database has no public address and there is no shell, so migrations, logins and the seed all run from inside the container (`bootstrap.ts`), under an advisory lock, every time it starts. It only adds what is missing; a second start changes nothing but the passwords. A failure prints one fixed line with no URL or password in it and exits 1.
+
+### D2. Two processes, so the server never holds the owner's URL
+
+`start.js` runs the setup as root and then starts the server as uid 1000 with the owner's URL (and anything like it) removed from its environment. A different user cannot read the parent's environment or the migration files, which are root's alone and sit outside `/white-house`. Deleting a variable inside one process would not have given that: the original environment stays readable to anything running as the same user. The earlier rule "the image does not carry the SQL files" is replaced by "it carries them where nothing but the setup can read them".
+
+### D3. The server's logins
+
+`wh_live_agent`, `wh_live_gateway`, `wh_live_ui`: each a member of its one White House role, no superuser, no create role, no create database, no bypass of row level security. Passwords must be 16 characters or more and all different.
+
+### D4. Configuration is carried over once, and only what is not about people
+
+`npm run export-config` prints the settings, schedules, budgets, rungs and caps in force and the suppressions that name a business. The bootstrap applies it on the first boot only, as version 1 of each value, and refuses anything else in it: a suppression that is an email or phone, a rung past an action's ceiling, an action this code does not have, a target, the kill switch, any unknown field.
+
+### D5. One mailbox, one owner
+
+`WH_ROLE=standby`: no scheduler, no run triggers (409 `standby`), no sending, no reading of the mailbox, and the mailbox is not held by the process at all. The default is primary.
+
+### D6. The API on a public address
+
+`/health` says `{"status":"ok"}` and nothing more. Every `/v1` route is checked for the token before the route is looked at, in constant time over hashes. Ten failures from one address in five minutes are answered 429 after that; **a correct token is always let through**, because behind a proxy many callers can share an address and the site's own server must not be locked out by a stranger's guessing. The protection is the token's length (32 characters or more, enforced off localhost); the limit is there to blunt noise. The log line for a failed route carries the route's first word and the error's kind, never the path, the body or the error's text.
+
+### D7. No search tool on the server
+
+With no Agent Reach, every one of its actions is "not configured" and nothing is run or counted. Outreach then needs Google Places and the direct reader; with both it runs fully and says once that job adverts are not searched there. Without them it stops as before.
+
+### D8. Time
+
+The schedule is read in the tenant's time zone by the database (`at time zone`), so the container's own clock zone does not matter. Tested with the process fourteen hours from London across both 2027 clock changes.
+
+### OPEN RISK: backups
+
+Point-in-time recovery, which BRIEF asks for, is **not confirmed** on the server's database, and this build takes no backup of its own because there is nowhere to put one. Nothing here pretends otherwise. To close it: switch on and test the provider's backups, or give the runner a bucket for a nightly dump and test a restore.
+
+## Prospecting, fifth round: more than one kind of business, 17 Nov 2026
+
+### K1. A list of kinds, each with its own rules
+
+The single `business_type` is replaced by `business_types` in the outreach settings. Each kind has an id (stored on every prospect), a name, the phrases searched for, its own excluded groups, guidance for the analysis on what its high value service is, guidance for the enquiry, its own forbidden topics with the reason given back when one is found, whether an emailed test is a fair test of it (`email_test`), a caution printed on its cards, who to ask for when nobody is named, its job advert search hint, and its leak assumptions.
+
+Seeded: private dental and aesthetics clinics; solicitors (conveyancing and family law); independent financial advisers and mortgage brokers; estate and letting agents; accountants for small businesses; home improvement trades doing large jobs. **Every leak assumption is the same cautious placeholder for every kind (20 to 60 enquiries a month, 10% to 30% lost, 10% to 25% would have bought). None has been set for its trade and none comes from a study.** Fees that are a percentage (advisers, estate agents) are not a published price, so those kinds will often get "no estimate".
+
+**Online shops are not a kind, on purpose:** a shop has no enquiry-to-booking path to test. Trades have `email_test` on, with a caution on every trade's card that trades answer the phone and messages far more than email, so an emailed test may under-report them (the coordinator's reading of Salekh's strategy file; I did not read that file).
+
+### K2. Rotation, and everything else, is by kind
+
+A run takes the next few (kind, place) pairs, least recently searched first, then least often searched, then place by place. `areas_per_run` is now the number of pairs. One Places call per search phrase per pair, the first page of every phrase before the second page of any. A prospect keeps its kind; its analysis, enquiry, checks, leak estimate, card and rivals all follow it; a rival is always the same kind. Stats are also given per kind. Job adverts are searched only for a kind that has a search hint (clinics).
+
+### K3. Settings stored before this are read as they are, and written back in the new shape
+
+A stored value with `business_type` at the top becomes: that one kind as "clinics", keeping its name, groups, forbidden words and assumptions, **switched on, and every other kind switched off**. So a house that was looking for clinics goes on looking for clinics until another kind is switched on. Nothing is rewritten on read. It is written in the new shape, as a new version, the next time the settings are changed from the command line, or at the next start of the server (bootstrap). Fresh settings have all six on.
+
+On the server, which has no shell, kinds are switched with `WH_OUTREACH_ENABLED_TYPES` (a comma separated list of ids: exactly those are on). Locally: `npm run outreach-settings -- --enable-type solicitors` (or `all`), `--disable-type`, and `--type` for per-kind group changes.
+
+### K4. The test comes before the name and the company
+
+27 of 48 analysed businesses were dropped before testing for want of a named person or a confirmed limited company. Now a business that matches its kind, is not a group or suppressed, and publishes an email is tested. After its result, and only for those at or below the capture threshold, Companies House is asked (company, and a director's name when nobody is named). Then: a limited company is required for the shortlist (Salekh's rule); a named person is not, and the card says "no named person found: ask for the owner or the practice manager" (worded per kind). `npm run restore-filtered -- --since YYYY-MM-DD` puts back to be tested the businesses dropped for those two reasons.
+
+A consequence: every local business of a kind that publishes an email is now tested in its own right, so "rivals tested later" are in practice the ones Places finds near a low scorer, or ones that waited for the day's allowance.
+
+Without a test mailbox the old order and the old filters still apply, a named person included.
+
+### K5. Enquiries are varied by code, not left to chance
+
+Each enquiry is given one of six shapes (greeting, which question comes first, how it closes), picked by a number worked out from the business's id, so a batch is spread across them and the same business always gets the same one. The service asked about is cut to the first item of whatever the price list said ("implants, veneers, Invisalign and whitening" becomes "implants") before the model sees it. The prompt was rewritten for any kind of business. Every check still applies, with one added for every kind: no address or postcode.
+

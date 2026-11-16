@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import pg from "pg";
+import { ENGLISH_PLACES, parseOutreachSettings, toStoredForm } from "./outreach/settings.js";
 
 /**
  * Seed tenant one: the tenant, its owner, the four floors with their launch
@@ -22,7 +23,7 @@ const FLOORS = [
   { slug: "roots", name: "ROOTS", departments: ["data", "ads", "creative"] },
   { slug: "mastore", name: "Mastore HQ", departments: ["data", "ads", "creative", "customer-relations", "engineering", "research"] },
   { slug: "twilight", name: "Twilight Pharmacy", departments: ["creative", "data"] },
-  { slug: "salekh-ventures", name: "Salekh Ventures", departments: ["data", "creative", "customer-relations", "engineering", "research"] },
+  { slug: "salekh-ventures", name: "Salekh Ventures", departments: ["data", "creative", "customer-relations", "engineering", "research", "outreach"] },
 ] as const;
 
 /** Rooms whose agent is built. Everything else is a room with nobody in it yet. */
@@ -30,6 +31,7 @@ const LIVE_ROOMS: ReadonlyArray<readonly [string, string]> = [
   ["salekh-ventures", "data"],
   ["salekh-ventures", "research"],
   ["mastore", "research"],
+  ["salekh-ventures", "outreach"],
 ];
 
 /**
@@ -60,6 +62,10 @@ function defaultBudget(floor: string, department: string): { daily_limit_gbp: nu
       const withCheck = Math.ceil((MONTHLY_GBP.creative / floorsWith("creative") / 30 + MONTHLY_GBP.rootsCompliance / 30) * 100) / 100;
       return { ...base, daily_limit_gbp: withCheck, basis: `${base.basis}, plus the ROOTS compliance pre check at £${MONTHLY_GBP.rootsCompliance} a month` };
     }
+    case "outreach":
+      // PLACEHOLDER. Outreach is not in section 14 and its cost has not been measured. Chosen only so that a
+      // first run of 50 businesses can finish: replace it with the real figure after that run.
+      return { daily_limit_gbp: 2, default: true, basis: "PLACEHOLDER: not in BRIEF.md section 14 and not yet measured. Replace after the first real run" };
     default:
       // Research has no line in section 14. This is a PLACEHOLDER equal to Creative's, not an estimate.
       return {
@@ -76,7 +82,21 @@ export interface SeedInput {
   tenantName: string;
   ownerName?: string;
   ownerEmail?: string;
+  /** The tenant's id, when it must match one that already exists somewhere else (the server and a developer's machine). */
+  tenantId?: string;
+  /**
+   * Configuration carried over from another database, used in place of the defaults below where it has a value.
+   * Like every default here it is only ever ADDED: a key that is already set is left alone.
+   */
+  carried?: CarriedConfig;
 }
+
+export interface CarriedConfig {
+  /** `business` is a floor's slug, or null for the whole house. */
+  config: { business: string | null; kind: string; key: string; value: unknown }[];
+  suppressions: { business: string | null; kind: string; value_key: string; reason: string; source: string }[];
+}
+const CARRIED_REASON = "carried over from the development database at first boot";
 
 const REASON = "seed default, for Salekh to adjust";
 
@@ -91,8 +111,12 @@ export async function seed(input: SeedInput): Promise<{ tenantId: string; tenant
   try {
     await client.query("begin");
     await client.query("select pg_advisory_xact_lock(hashtextextended('white-house-seed', 0))");
-    await client.query("insert into tenants (name, slug) values ($1, $2) on conflict (slug) do nothing", [input.tenantName, input.tenantSlug]);
-    const tenantId = (await client.query("select tenant_id from tenants where slug = $1", [input.tenantSlug])).rows[0].tenant_id as string;
+    if (input.tenantId) await client.query("insert into tenants (tenant_id, name, slug) values ($1, $2, $3) on conflict do nothing", [input.tenantId, input.tenantName, input.tenantSlug]);
+    else await client.query("insert into tenants (name, slug) values ($1, $2) on conflict (slug) do nothing", [input.tenantName, input.tenantSlug]);
+    const found = (await client.query("select tenant_id from tenants where slug = $1", [input.tenantSlug])).rows[0];
+    if (!found) throw new Error("the tenant id given is already used by a tenant with another slug");
+    const tenantId = found.tenant_id as string;
+    if (input.tenantId && tenantId !== input.tenantId) throw new Error("a tenant with this slug already exists under another id");
 
     const owner = await client.query("select 1 from members where tenant_id = $1 and role = 'owner' limit 1", [tenantId]);
     if (owner.rows.length === 0) {
@@ -102,7 +126,11 @@ export async function seed(input: SeedInput): Promise<{ tenantId: string; tenant
       );
     }
 
-    const addConfig = async (businessId: string | null, kind: string, key: string, value: unknown) => {
+    const carriedFor = (slug: string | null, kind: string, key: string) => input.carried?.config.find((c) => c.business === slug && c.kind === kind && c.key === key);
+    const slugOf = new Map<string | null, string | null>([[null, null]]);
+    const addConfig = async (businessId: string | null, kind: string, key: string, fallback: unknown) => {
+      const carried = carriedFor(slugOf.get(businessId) ?? null, kind, key);
+      const value = carried ? carried.value : fallback;
       const exists = await client.query(
         "select 1 from config_versions where tenant_id = $1 and business_id is not distinct from $2 and kind = $3 and key = $4 limit 1",
         [tenantId, businessId, kind, key],
@@ -111,7 +139,7 @@ export async function seed(input: SeedInput): Promise<{ tenantId: string; tenant
       await client.query(
         `insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, reason)
          values ($1, $2, $3, $4, $5::jsonb, 1, 'system', $6)`,
-        [tenantId, businessId, kind, key, JSON.stringify(value), REASON],
+        [tenantId, businessId, kind, key, JSON.stringify(value), carried ? CARRIED_REASON : REASON],
       );
     };
 
@@ -121,14 +149,26 @@ export async function seed(input: SeedInput): Promise<{ tenantId: string; tenant
         [tenantId, floor.slug, floor.name, floor.departments],
       );
       const row = (await client.query("select business_id, departments from businesses where tenant_id = $1 and slug = $2", [tenantId, floor.slug])).rows[0];
+      slugOf.set(row.business_id as string, floor.slug);
       const missing = floor.departments.filter((d) => !(row.departments as string[]).includes(d));
       if (missing.length > 0) {
         await client.query("update businesses set departments = departments || $2::text[] where business_id = $1", [row.business_id, missing]);
       }
       for (const department of floor.departments) {
         await addConfig(row.business_id, "budget", department, defaultBudget(floor.slug, department));
+        // The first target, from Salekh's prospecting brief. Everything else takes the defaults in code.
+        // The kinds of business, the places and everything else take the defaults in code (outreach/settings.ts) and
+        // are written out in full here, so that what is in force can be read and edited in one place.
+        if (department === "outreach") await addConfig(row.business_id, "setting", "outreach", toStoredForm(parseOutreachSettings({ area: "England", find_per_run: 50, areas: [...ENGLISH_PLACES], areas_per_run: 8 })));
+        if (department === "outreach") {
+          // Test enquiries by email: an allowance of 30 a day (a count, not money), and rung 2, so that every one
+          // needs Salekh's yes. The action's ceiling in code is rung 3. Nothing else on this floor has a cap or a rung.
+          await addConfig(row.business_id, "cap", "enquiries_per_day", { limit: 30 });
+          await addConfig(row.business_id, "rung", "enquiry.send_email", { rung: 2 });
+        }
         if (LIVE_ROOMS.some(([f, d]) => f === floor.slug && d === department)) {
-          await addConfig(row.business_id, "schedule", department, { live: true, runs: "on request" });
+          // Outreach runs itself each morning (Salekh's brief: a shortlist by 9am). Every other room runs on request.
+          await addConfig(row.business_id, "schedule", department, department === "outreach" ? { live: true, runs: "daily", daily_at: "08:00" } : { live: true, runs: "on request" });
         }
       }
     }
@@ -138,6 +178,20 @@ export async function seed(input: SeedInput): Promise<{ tenantId: string; tenant
       default: true,
       basis: `BRIEF.md section 14: Chief of Staff at £${MONTHLY_GBP.chief} a month, over 30 days`,
     });
+
+    // Whatever else was carried over and has no default above (a rung on another action, a cap, another room's setting).
+    const idOf = new Map<string | null, string | null>([...slugOf].map(([id, slug]) => [slug, id]));
+    for (const c of input.carried?.config ?? []) {
+      if (c.business !== null && !idOf.has(c.business)) continue; // a floor this house does not have
+      await addConfig(idOf.get(c.business) ?? null, c.kind, c.key, c.value);
+    }
+    for (const sup of input.carried?.suppressions ?? []) {
+      if (sup.business !== null && !idOf.has(sup.business)) continue;
+      await client.query(
+        "insert into suppressions (tenant_id, business_id, kind, value_key, reason, source) values ($1, $2, $3, $4, $5, $6) on conflict (tenant_id, kind, value_key) do nothing",
+        [tenantId, idOf.get(sup.business) ?? null, sup.kind, sup.value_key, sup.reason, sup.source],
+      );
+    }
 
     await client.query("commit");
     return { tenantId, tenantSlug: input.tenantSlug };
