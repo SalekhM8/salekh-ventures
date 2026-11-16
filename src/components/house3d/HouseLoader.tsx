@@ -9,9 +9,8 @@ const House3D = dynamic(() => import("./House3D"), {
   ),
 });
 
-/* On the public site the house always runs as the demo: made up business
-   names and no connection to the runner. Real names and live data only show
-   on a local development server. */
-export function HouseLoader() {
-  return <House3D demo={process.env.NODE_ENV === "production"} />;
+/* The house is the demo (made up names, no connection to the runner) unless
+   the page says the visitor is the signed-in owner, or this is a local dev server. */
+export function HouseLoader({ owner = false }: { owner?: boolean }) {
+  return <House3D demo={!owner} />;
 }

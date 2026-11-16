@@ -1,5 +1,6 @@
 "use client";
 
+import type { Decision, DecisionResult, PendingEnquiry } from "./Approvals";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEPT_API, ROOMS, type Courier, type DeptKey, type Proposal, type RoomState, type Sim } from "./model";
 
@@ -171,7 +172,22 @@ export function useLiveHouse(enabled = true) {
     return r.ok ? { title: String(r.json.title ?? ""), body: String(r.json.body ?? "") } : null;
   }, []);
 
-  return { connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output };
+  /** The enquiries waiting for a yes in one room: exactly what would be sent. */
+  const approvals = useCallback(async (roomId: string): Promise<PendingEnquiry[] | null> => {
+    const r = await call(`v1/rooms/${toApi(roomId)}/approvals`);
+    if (!r.ok || !Array.isArray(r.json.approvals)) return null;
+    return (r.json.approvals as PendingEnquiry[]).filter((a) => a && a.enquiry);
+  }, []);
+  const decideMany = useCallback(
+    async (decisions: Decision[]): Promise<DecisionResult[] | null> => {
+      const r = await call("v1/approvals/batch", { decisions });
+      await refresh();
+      return r.ok && Array.isArray(r.json.results) ? (r.json.results as DecisionResult[]) : null;
+    },
+    [refresh],
+  );
+
+  return { connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany };
 }
 
 export const RUN_REFUSED: Record<string, string> = {

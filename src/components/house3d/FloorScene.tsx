@@ -121,6 +121,13 @@ function screenItems(dept: DeptKey): Item[] {
       { x: -1.77 + i * 0.92, y: -0.55, w: 0.78, h: 0.1, color: cream, mode: "line" },
     ]);
   }
+  if (dept === "outreach") {
+    // a shortlist: rows with a tick box each
+    return [0, 1, 2, 3, 4].flatMap((i): Item[] => [
+      { x: -1.85, y: 0.76 - i * 0.38, w: 0.22, h: 0.22, color: i < 2 ? c : cream, mode: "pop" },
+      { x: -1.5, y: 0.76 - i * 0.38, w: 2.2 + ((i * 5) % 4) * 0.3, h: 0.12, color: cream, mode: "line" },
+    ]);
+  }
   if (dept === "research") {
     return [
       { x: -1.85, y: 0.75, w: 2.4, h: 0.16, color: cream, mode: "line" },
@@ -269,6 +276,35 @@ function DeptProp({ dept, active, still }: { dept: DeptKey; active: boolean; sti
         <mesh position={[0.45, 1.75, 0]} material={M.paper} castShadow>
           <boxGeometry args={[0.7, 0.3, 0.5]} />
         </mesh>
+      </group>
+    );
+  }
+  if (dept === "outreach") {
+    // a map board with pins
+    return (
+      <group position={[-3.2, 0, -5.6]} rotation={[0, 0.5, 0]}>
+        <mesh position={[0, 1.2, 0]} material={M.metal} castShadow>
+          <boxGeometry args={[0.1, 2.4, 0.1]} />
+        </mesh>
+        <mesh position={[0, 2.3, 0.12]} castShadow>
+          <boxGeometry args={[1.9, 1.5, 0.12]} />
+          <meshStandardMaterial color="#F4E8DE" roughness={1} />
+        </mesh>
+        <group ref={blink}>
+          {[
+            [-0.6, 2.6],
+            [0.3, 2.75],
+            [0.65, 2.2],
+            [-0.2, 2.1],
+            [-0.7, 1.9],
+            [0.2, 1.8],
+          ].map(([px, py], i) => (
+            <mesh key={i} position={[px ?? 0, py ?? 0, 0.22]}>
+              <boxGeometry args={[0.13, 0.13, 0.08]} />
+              <meshBasicMaterial color={i % 3 === 0 ? "#3DDC97" : color} toneMapped={false} />
+            </mesh>
+          ))}
+        </group>
       </group>
     );
   }

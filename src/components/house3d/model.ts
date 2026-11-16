@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
    brief. Everything that happens is a browser simulation: no agents,
    no real data. */
 
-export type DeptKey = "data" | "ads" | "creative" | "cr" | "eng" | "research";
+export type DeptKey = "data" | "ads" | "creative" | "cr" | "eng" | "research" | "outreach";
 export type RoomState = "idle" | "working" | "waiting" | "done" | "failed" | "handoff";
 export type Vec3 = [number, number, number];
 
@@ -33,10 +33,11 @@ export const DEPTS: Record<DeptKey, { name: string; color: string; work: string;
   cr: { name: "Customer Relations", color: "#16B5A6", work: "Drafting a reply to a customer", ask: "A draft reply needs your yes", output: "Customer reply" },
   eng: { name: "Engineering", color: "#5E6B85", work: "Working on a pull request", ask: "A pull request is ready for review", output: "Pull request" },
   research: { name: "Research", color: "#C98A1A", work: "Reading the market and writing it up", ask: "A research brief needs your call", output: "Market report" },
+  outreach: { name: "Outreach", color: "#E55D40", work: "Finding and checking businesses to contact", ask: "A message is ready for you to send", output: "Shortlist" },
 };
 
 /* Department ids as the runner names them. */
-export const DEPT_API: Record<DeptKey, string> = { data: "data", ads: "ads", creative: "creative", cr: "customer-relations", eng: "engineering", research: "research" };
+export const DEPT_API: Record<DeptKey, string> = { data: "data", ads: "ads", creative: "creative", cr: "customer-relations", eng: "engineering", research: "research", outreach: "outreach" };
 
 export const AMBER = "#F5A300";
 export const RED = "#E0352B";
@@ -72,7 +73,7 @@ export const FLOORS: { id: string; name: string; level: number; depts: DeptKey[]
   { id: "roots", name: "ROOTS", level: 4, depts: ["data", "ads", "creative"], bays: [-15.5, -11.5, 11.5] },
   { id: "mastore", name: "Mastore HQ", level: 3, depts: ["data", "ads", "creative", "cr", "eng", "research"], bays: [-19.5, -15.5, -11.5, 11.5, 15.5, 19.5] },
   { id: "twilight", name: "Twilight", level: 2, depts: ["creative", "data"], bays: [-11.5, 11.5] },
-  { id: "salekh-ventures", name: "Salekh Ventures", level: 1, depts: ["data", "creative", "cr", "eng", "research"], bays: [-19.5, -15.5, -11.5, 11.5, 15.5] },
+  { id: "salekh-ventures", name: "Salekh Ventures", level: 1, depts: ["outreach", "data", "creative", "cr", "eng", "research"], bays: [-19.5, -15.5, -11.5, 11.5, 15.5, 19.5] },
 ];
 
 export type Room = {
@@ -330,7 +331,7 @@ export function answer(question: string, sim: Sim, stopped: boolean, names: Name
   };
   const floor = FLOORS.find((f) => q.includes(fn(f.id).toLowerCase()) || q.includes(f.id));
   const dept = (Object.keys(DEPTS) as DeptKey[]).find(
-    (k) => q.includes(DEPTS[k].name.toLowerCase()) || (k === "cr" && q.includes("customer")) || (k === "eng" && q.includes("engineer")) || (k === "research" && q.includes("market")),
+    (k) => q.includes(DEPTS[k].name.toLowerCase()) || (k === "cr" && q.includes("customer")) || (k === "eng" && q.includes("engineer")) || (k === "research" && q.includes("market")) || (k === "outreach" && (q.includes("prospect") || q.includes("lead"))),
   );
 
   const isDemo = names !== REAL_NAMES;

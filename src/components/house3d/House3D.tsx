@@ -9,11 +9,12 @@ import { WhiteHouse } from "./WhiteHouse";
 import { Interior } from "./Interior";
 import { FloorScene, ROOM_W, floorCamera, floorPan } from "./FloorScene";
 import { RUN_REFUSED, useLiveHouse } from "./live";
+import { Approvals } from "./Approvals";
 import { Markdown } from "./Markdown";
 import { CATALOGUE } from "@/lib/agents";
 
 /* The house's department keys, matched to the catalogue of agent jobs. */
-const CATALOGUE_ID: Record<string, string> = { data: "data", ads: "ads", creative: "content", cr: "customer-relations", eng: "engineering", research: "research" };
+const CATALOGUE_ID: Record<string, string> = { data: "data", ads: "ads", creative: "content", cr: "customer-relations", eng: "engineering", research: "research", outreach: "outreach" };
 import {
   AMBER,
   C,
@@ -558,7 +559,7 @@ export default function House3D({
           <div className="min-w-0 whitespace-nowrap">
             <Headline size={lowPower ? 20 : 27}>The White House</Headline>
             <div className={lowPower ? "hidden" : "mt-1.5"}>
-              <Eyebrow color={isLive ? "#1c7046" : C.terracotta}>{isLive ? "Live · local runner" : demo ? "Interactive demo · simulated" : "Sample simulation · not live"}</Eyebrow>
+              <Eyebrow color={isLive ? "#1c7046" : C.terracotta}>{isLive ? "Live" : demo ? "Interactive demo · simulated" : "Sample simulation · not live"}</Eyebrow>
             </div>
           </div>
           <div className="flex flex-none gap-1.5">
@@ -744,6 +745,12 @@ export default function House3D({
               {!stopped && roomState === "waiting" && (
                 <section className="mt-5 rounded-2xl p-4" style={{ background: "#FFF3D6", border: `1.5px solid ${AMBER}` }}>
                   <Eyebrow color={STATE_TEXT.waiting}>Needs your yes</Eyebrow>
+                  {isLive && room.dept === "outreach" ? (
+                    <div className="mt-2">
+                      <Approvals key={room.id} load={() => live.approvals(room.id)} decide={live.decideMany} />
+                    </div>
+                  ) : (
+                    <>
                   <p className="mt-1.5" style={{ font: `300 22px/1.2 ${SERIF}`, letterSpacing: "-0.02em" }}>
                     {roomSim.proposal?.title ?? DEPTS[room.dept].ask}
                   </p>
@@ -760,6 +767,8 @@ export default function House3D({
                       Reject
                     </button>
                   </div>
+                    </>
+                  )}
                 </section>
               )}
               {!stopped && roomState === "failed" && (

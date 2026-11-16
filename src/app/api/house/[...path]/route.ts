@@ -1,9 +1,12 @@
 /* Passes the house UI's requests to the White House runner, adding the token
    on the server so it never reaches the browser.
 
-   DEVELOPMENT ONLY. The private UI has no login yet, and these routes can
-   approve actions and flip the kill switch. Until login exists they refuse to
-   work anywhere but a local dev server. */
+   These routes can approve actions and flip the kill switch. On a local dev
+   server they are open. Anywhere else they need the owner's signed session
+   cookie (src/lib/houseAuth.ts); without it they answer 401. */
+
+import { cookies } from "next/headers";
+import { mayUseLiveHouse, SESSION_COOKIE } from "@/lib/houseAuth";
 
 const ALLOWED = [
   /^v1\/house$/,
@@ -11,15 +14,19 @@ const ALLOWED = [
   /^v1\/outputs\/[\w-]+\/score$/,
   /^v1\/approvals\/[\w-]+$/,
   /^v1\/kill-switch$/,
-  /^v1\/rooms\/[\w-]+:[\w-]+\/(run|acknowledge)$/,
+  /^v1\/rooms\/[\w-]+:[\w-]+\/(run|acknowledge|approvals)$/,
   /^v1\/ask$/,
 ];
 
 async function forward(request: Request, path: string[]) {
   const url = process.env.WH_RUNNER_URL;
   const token = process.env.WH_API_TOKEN;
-  if (process.env.NODE_ENV !== "development" || !url || !token) {
-    return Response.json({ reason: "runner_not_connected" }, { status: 503 });
+  if (!mayUseLiveHouse((await cookies()).get(SESSION_COOKIE)?.value)) return Response.json({ reason: "not_signed_in" }, { status: 401 });
+  if (!url || !token) return Response.json({ reason: "runner_not_connected" }, { status: 503 });
+  // A change must come from this site's own pages, never from another site's form or script.
+  if (request.method === "POST") {
+    const origin = request.headers.get("origin");
+    if (origin && new URL(origin).host !== request.headers.get("host")) return Response.json({ reason: "bad_origin" }, { status: 403 });
   }
   const joined = path.map(decodeURIComponent).join("/");
   if (!ALLOWED.some((re) => re.test(joined))) return Response.json({ reason: "not_found" }, { status: 404 });
