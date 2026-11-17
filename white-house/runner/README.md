@@ -166,6 +166,10 @@ A business's own pages are read directly by the runner (`src/control/connectors/
 
 `npm run outreach-settings -- --enquiry-rung 3` (the owner's switch; `2` goes back to "each needs your yes"). At rung 3 a test enquiry is queued, given one of three slots (working hours, a weekday evening, the weekend) so each kind of business is tested evenly across them, checked again in the moment before it goes, and sent in its slot between 07:00 and 21:30, 90 seconds apart, inside the daily cap. An enquiry sent while a business was shut is scored on whether anything useful came back before it next opened. Sending stops for the day after more than three failed sends or bounces, any reply that reads as a complaint, or a refused mailbox login. Bank holidays are not known to the system: add them to `non_working_dates`. See `DEPLOY.md` for the server.
 
+## Mail transport
+
+`MAIL_TRANSPORT=smtp_imap` (default) or `gmail_api` (HTTPS only, for hosts that block SMTP; `npm run gmail-authorise` fetches its refresh token). A send that never reached the mail server is put back in the queue, never marked failed. See `DEPLOY.md`.
+
 ## Kinds of business
 
 The Outreach room looks for several kinds of business (`business_types` in its settings): clinics, solicitors, financial advisers and mortgage brokers, estate and letting agents, accountants, and home improvement trades. Each has its own search phrases, groups, enquiry guidance, forbidden topics and leak assumptions (all placeholders until edited). Online shops are left out on purpose.

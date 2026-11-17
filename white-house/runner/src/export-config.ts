@@ -24,7 +24,7 @@ export async function exportConfig(db: Db, tenantId: string, now = new Date()): 
     const config = (await tx.query(
       `select distinct on (c.business_id, c.kind, c.key) b.slug as business, c.kind, c.key, c.value
          from config_versions c left join businesses b on b.business_id = c.business_id
-        where c.kind = any ($1) and c.key <> 'outreach.patch'
+        where c.kind = any ($1) and c.key not in ('outreach.patch', 'outreach.defaults')
         order by c.business_id, c.kind, c.key, c.version desc`,
       [KINDS],
     )).rows.map((r) => ({

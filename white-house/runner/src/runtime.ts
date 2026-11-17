@@ -16,10 +16,10 @@ import type { ModelCaller } from "./agents/model-caller.js";
 import { runOutreach } from "./outreach/pipeline.js";
 import { forType, parseOutreachSettings, type OutreachSettings } from "./outreach/settings.js";
 import { countWaiting } from "./outreach/store.js";
-import type { Mailbox } from "./control/connectors/mailbox.js";
+import type { Mailbox, MailCheck } from "./control/connectors/mailbox.js";
 import type { PlacesConnector } from "./control/connectors/places.js";
 import type { DirectReader } from "./control/connectors/direct-read.js";
-import { assignMissingSlots, breakerToday, checkFailures, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
+import { assignMissingSlots, breakerToday, checkFailures, requeueUnsent, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
 import { lintEnquiry, nextOpening, openAt, scoreAfter, slotAt, type Slot } from "./outreach/enquiry-rules.js";
 import { replyPrompt } from "./outreach/pipeline.js";
 import { decideApproval } from "./control/approvals.js";
@@ -122,6 +122,10 @@ export interface Runtime {
   listSent(roomId: string, since: string | null): Promise<Answer<{ enquiries: SentEnquiry[] }>>;
   /** Start sending whatever is due, if it is not already going. Returns at once. */
   sendDue(): void;
+  /** Try a connection to the mail server each way, sending and reading nothing. null: no mailbox, or a standby. */
+  checkMail(): Promise<MailCheck | null>;
+  /** Put back in the queue the enquiries marked failed since a day that never reached the mail server. Returns how many. */
+  requeueUnsent(since: Date): Promise<number>;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -165,13 +169,22 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const clock = options.now ?? (() => new Date());
   const actionTypes = options.actionTypes ?? defaultActionTypes;
   const standby = options.role === "standby";
+  let unreachableInARow = 0;
+  let mailState: MailCheck | null = null;
   // On a standby the mailbox is not held at all: nothing in this process can send from it or read it.
   const mailbox = standby ? null : (options.mailbox ?? null);
   const gateway = createGateway({
     db: gatewayDb,
     actionTypes,
     // The dummy action's connector is a Map in memory. The mail connector is the only thing that holds the test mailbox.
-    connectors: { ...(options.connectors ?? { dummy: createDummyConnector() }), mail: createMailConnector({ db: gatewayDb, mailbox: mailbox, now: clock, onLoginFailure: (_tenant, businessId) => tripBreaker(gatewayDb, tenantId, businessId, "mailbox_login", clock()) }) },
+    connectors: { ...(options.connectors ?? { dummy: createDummyConnector() }), mail: createMailConnector({ db: gatewayDb, mailbox: mailbox, now: clock, onLoginFailure: (_tenant, businessId) => tripBreaker(gatewayDb, tenantId, businessId, "mailbox_login", clock(), "EAUTH"),
+      // Twice running with the mail server out of reach, and it is not tried a third time today. Nothing went, so no business was burnt.
+      onUnreachable: async (_tenant, businessId, code) => {
+        unreachableInARow += 1;
+        if (unreachableInARow >= 2) await tripBreaker(gatewayDb, tenantId, businessId, "mail_unreachable", clock(), code);
+      },
+      onSent: () => { unreachableInARow = 0; },
+    }) },
     now: clock,
   });
   const inFlight = new Map<string, Promise<void>>();
@@ -555,6 +568,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
    * kill switch, the day's allowance, the budget, the end of the sending hours, or a tripped breaker.
    */
   async function sendApproved(): Promise<void> {
+    // If the check at start found that mail cannot leave this server, it is looked at again before anything is tried.
+    // While it still cannot, no send is attempted at all.
+    if (mailState && !mailState.out.reachable && !(await checkMail())?.out.reachable) return;
     for (;;) {
       await syncDecisions(gatewayDb, tenantId, clock());
       await requeue();
@@ -610,7 +626,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         const done = await gateway.submit({
           tenantId, businessId: next.business_id, department: "outreach", actionType: ENQUIRY_ACTION,
           // One key per attempt. What stops a second send is the enquiry's own row, claimed before sending, and the one-per-business rule in the database.
-          actionKey: `enquiry:${next.enquiry_id}:auto:${clock().getTime()}`,
+          actionKey: `enquiry:${next.enquiry_id}:auto:${randomUUID()}`,
           payload: { enquiry_id: next.enquiry_id, prospect_id: next.prospect_id, to: next.to_address, subject: next.subject, body: next.body },
           reason: "Test enquiry by email",
         });
@@ -653,6 +669,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     changed();
     return counts;
   };
+
+  async function checkMail(): Promise<MailCheck | null> {
+    if (standby || !mailbox?.check) return null;
+    mailState = await mailbox.check().catch(() => ({ out: { reachable: false, code: "EFAILED" }, in: { reachable: false, code: "EFAILED" } }));
+    return mailState;
+  }
+  /** For the top of the shortlist: why mail cannot leave this server, or null when it can (or has not been checked). */
+  const mailOut = (): string | null => (mailState && !mailState.out.reachable ? (mailState.out.code ?? "unknown") : null);
 
   const listSent: Runtime["listSent"] = async (roomId, since) => {
     const from = since === null ? new Date(clock().getTime() - 7 * 24 * 60 * 60 * 1000) : new Date(since);
@@ -912,7 +936,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       tenantId, businessId: room.businessId, businessSlug: room.business, gatewayDb, agentDb, clock, apiKey, settings,
       model: options.model, reach: options.reach ?? null, companiesHouse: options.companiesHouse ?? null,
       whRoot: options.whRoot, usdToGbp: options.usdToGbp, firstRunId: started.runId, firstStage, changed,
-      mailbox, gateway, afterEnquiries: kickSender, places: options.places ?? null, directReader: options.directReader ?? null,
+      mailbox, gateway, afterEnquiries: kickSender, mailOut, places: options.places ?? null, directReader: options.directReader ?? null,
       ...(options.sleep ? { sleep: options.sleep } : {}),
     })
       .catch((err) => console.error(`outreach run ${started.runId} stopped unexpectedly: ${err instanceof Error ? err.name : "error"}`))
@@ -925,5 +949,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, sendDue: kickSender };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

@@ -17,6 +17,7 @@
     "prospect-stats": "node dist/outreach/stats-cli.js",
     "check-schemas": "node dist/check-schemas.js",
     "export-config": "node dist/export-config.js",
+    "gmail-authorise": "node dist/gmail-authorise.js",
     "restore-filtered": "node dist/outreach/restore-filtered-cli.js",
     "bootstrap": "node dist/bootstrap.js",
     "reset-attempts": "node dist/outreach/reset-attempts-cli.js",

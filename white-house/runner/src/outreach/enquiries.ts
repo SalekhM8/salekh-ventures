@@ -3,7 +3,7 @@ import type { ModelCaller } from "../agents/model-caller.js";
 import { readCurrent, readRung } from "../control/config.js";
 import { emitEvent } from "../control/events.js";
 import type { Connector, ConnectorCall, ConnectorResult, ReadBackResult } from "../control/connectors/connector.js";
-import { MailboxLoginError, type InboundMail, type Mailbox } from "../control/connectors/mailbox.js";
+import { MailboxLoginError, MailboxUnreachableError, type InboundMail, type Mailbox } from "../control/connectors/mailbox.js";
 import { isUniqueViolation, lock, type Db, type Tx } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import type { Gateway } from "../control/gateway.js";
@@ -130,7 +130,16 @@ export async function proposeEnquiry(
  * The mail connector the gateway holds. It sends exactly the stored enquiry, once. In the moment before sending
  * it claims the row (so a second attempt finds nothing to send) and checks the suppression list again.
  */
-export function createMailConnector(options: { db: Db; mailbox: Mailbox | null; now?: () => Date; onLoginFailure?: (tenantId: string, businessId: string) => Promise<void> | void }): Connector {
+export function createMailConnector(options: {
+  db: Db; mailbox: Mailbox | null; now?: () => Date;
+  onLoginFailure?: (tenantId: string, businessId: string) => Promise<void> | void;
+  /** The mail server was not reached: nothing went. `code` is the network error code. */
+  onUnreachable?: (tenantId: string, businessId: string, code: string) => Promise<void> | void;
+  /** A message was handed over and is now known to have gone. */
+  onSent?: () => void;
+  log?: (line: string) => void;
+}): Connector {
+  const log = options.log ?? ((line: string) => console.error(line));
   const clock = options.now ?? (() => new Date());
   return {
     async execute(call: ConnectorCall): Promise<ConnectorResult> {
@@ -166,12 +175,31 @@ export function createMailConnector(options: { db: Db; mailbox: Mailbox | null; 
           // The login was refused, so it certainly did not go: the enquiry goes back to where it was, and sending stops for the day.
           await options.db.tx(call.tenantId, (tx) => tx.query("update enquiries set status = $2 where enquiry_id = $1 and status = 'sending'", [payload.enquiry_id, before]));
           await options.onLoginFailure?.(call.tenantId, call.businessId);
+          log("enquiry not sent: mailbox_login_failed EAUTH (put back in the queue)");
           throw new ControlError("mailbox_login_failed", "the test mailbox refused the login");
         }
-        // It was claimed, so it is never tried again: it may have gone.
-        await options.db.tx(call.tenantId, (tx) => tx.query("update enquiries set status = 'failed', decided_at = coalesce(decided_at, $2) where enquiry_id = $1", [payload.enquiry_id, clock()]));
-        throw new ControlError("mail_send_failed", "the mail server did not accept the message");
+        if (err instanceof MailboxUnreachableError) {
+          // The mail server was never reached, so it certainly did not go. This is no failure of the enquiry: it goes back
+          // to where it was, the business has not been contacted, and it keeps its one chance.
+          await options.db.tx(call.tenantId, async (tx) => {
+            await tx.query("update enquiries set status = $2 where enquiry_id = $1 and status = 'sending'", [payload.enquiry_id, before]);
+            await emitEvent(tx, { tenantId: call.tenantId, businessId: call.businessId, department: DEPARTMENT, type: "stage", reasonCode: "mail_unreachable", summary: "An enquiry was not sent: the mail server could not be reached. It was put back in the queue", payload: { code: err.networkCode }, now: clock() });
+          });
+          log(`enquiry not sent: mail_unreachable ${err.networkCode} (put back in the queue)`);
+          await options.onUnreachable?.(call.tenantId, call.businessId, err.networkCode);
+          throw new ControlError("mail_unreachable", `the mail server could not be reached (${err.networkCode})`);
+        }
+        // It was claimed and the server was spoken to, so it is never tried again: it may have gone. The reason is kept as a
+        // fixed code with the network error code beside it. Never the server's words, the address or the message.
+        const code = typeof (err as { networkCode?: unknown } | null)?.networkCode === "string" && /^[A-Z0-9_]{1,40}$/.test((err as { networkCode: string }).networkCode) ? (err as { networkCode: string }).networkCode : "UNKNOWN";
+        await options.db.tx(call.tenantId, async (tx) => {
+          await tx.query("update enquiries set status = 'failed', failure = $3, decided_at = coalesce(decided_at, $2) where enquiry_id = $1", [payload.enquiry_id, clock(), `send_failed:${code}`]);
+          await emitEvent(tx, { tenantId: call.tenantId, businessId: call.businessId, department: DEPARTMENT, type: "stage", reasonCode: "enquiry_send_failed", summary: "An enquiry failed to send after the mail server was reached. It is not tried again: it may have gone", payload: { code }, now: clock() });
+        });
+        log(`enquiry failed to send: send_failed ${code} (not tried again: it may have gone)`);
+        throw new ControlError("mail_send_failed", `the mail server did not accept the message (${code})`);
       }
+      options.onSent?.();
       const sentAt = clock();
       await options.db.tx(call.tenantId, async (tx) => {
         await tx.query("update enquiries set status = 'sent', message_id = $2, sent_at = $3 where enquiry_id = $1", [payload.enquiry_id, messageId, sentAt]);
@@ -500,8 +528,9 @@ export async function enquiryCounts(db: Db, scope: ProspectScope, settings: Outr
 
 // ---- circuit breakers ------------------------------------------------------------------
 
-export type BreakerReason = "send_failures" | "complaint" | "mailbox_login";
+export type BreakerReason = "send_failures" | "complaint" | "mailbox_login" | "mail_unreachable";
 const BREAKER: Record<BreakerReason, string> = {
+  mail_unreachable: "the mail server could not be reached from this server",
   send_failures: "too many enquiries failed to send or bounced today",
   complaint: "a reply read as a complaint about being contacted",
   mailbox_login: "the test mailbox refused the login",
@@ -511,23 +540,35 @@ const BREAKER: Record<BreakerReason, string> = {
  * Stop automatic sending for the rest of the tenant's day, and say why. Kept in the event stream, so it holds
  * across a restart and is on the record. The first reason of the day stands; later ones are not piled on.
  */
-export async function tripBreaker(db: Db, tenantId: string, businessId: string, why: BreakerReason, now: Date): Promise<void> {
+export async function tripBreaker(db: Db, tenantId: string, businessId: string, why: BreakerReason, now: Date, code: string | null = null): Promise<void> {
+  // Only ever a network error code beside the fixed words.
+  const detail = code && /^[A-Z0-9_]{1,40}$/.test(code) ? ` (${code})` : "";
   await db.tx(tenantId, async (tx) => {
     await lock(tx, "enquiry-breaker", tenantId);
     if (await breakerIn(tx, now)) return;
-    await emitEvent(tx, { tenantId, businessId, department: DEPARTMENT, type: "stage", reasonCode: `enquiry_breaker_${why}`, summary: `Sending stopped for today: ${BREAKER[why]}`, now });
+    await emitEvent(tx, { tenantId, businessId, department: DEPARTMENT, type: "stage", reasonCode: `enquiry_breaker_${why}`, summary: `Sending stopped for today: ${BREAKER[why]}${detail}`, ...(detail ? { payload: { code } } : {}), now });
   });
+  console.error(`sending stopped for today: ${why}${detail}`);
+}
+
+/** Lift today's stop. Written when an owner has put right what caused it and asked for the unsent to be queued again. */
+export async function resetBreaker(db: Db, tenantId: string, businessId: string, now: Date): Promise<void> {
+  await db.tx(tenantId, (tx) => emitEvent(tx, { tenantId, businessId, department: DEPARTMENT, type: "stage", reasonCode: "enquiry_breaker_reset", summary: "Sending was allowed again by the owner, after unsent enquiries were put back in the queue", now }));
 }
 
 async function breakerIn(tx: Tx, now: Date): Promise<string | null> {
   const row = (await tx.query(
-    `select e.reason_code from events e join tenants t on t.tenant_id = e.tenant_id
+    `select e.reason_code, e.summary from events e join tenants t on t.tenant_id = e.tenant_id
       where e.type = 'stage' and e.reason_code like 'enquiry\\_breaker\\_%'
         and (e.created_at at time zone t.timezone)::date = (($1::timestamptz) at time zone t.timezone)::date
-      order by e.seq limit 1`,
+      order by e.seq desc limit 20`,
     [now],
-  )).rows[0];
-  return row ? BREAKER[(row.reason_code as string).slice("enquiry_breaker_".length) as BreakerReason] ?? "a safety check" : null;
+  )).rows;
+  // The latest word stands: a stop after a reset is a stop, and a reset after a stop lifts it. The first stop since then gives the reason.
+  const since = row.findIndex((r) => r.reason_code === "enquiry_breaker_reset");
+  const stops = (since === -1 ? row : row.slice(0, since)).filter((r) => r.reason_code !== "enquiry_breaker_reset");
+  const first = stops.at(-1);
+  return first ? String(first.summary).replace(/^Sending stopped for today: /, "") : null;
 }
 
 /** Why sending is stopped today, in plain words, or null when it is not. */
@@ -675,4 +716,30 @@ export async function assignMissingSlots(db: Db, tenantId: string, now: Date, sl
     for (const r of rows) await tx.query("update enquiries set sent_slot = $2 where enquiry_id = $1", [r.enquiry_id, await leastUsedSlot(tx, r.business_id as string, r.business_type as string, now, slots.get(r.business_id as string))]);
     return rows.length;
   });
+}
+
+// ---- putting back what never went --------------------------------------------------------
+
+/**
+ * Enquiries marked failed since a day, whose failure was that the mail server was never reached (or whose reason
+ * was not recorded, from before reasons were kept), go back in the queue. They certainly did not go, so the
+ * business has not been contacted. One that failed after the server was reached is left alone: it may have gone.
+ * When any is put back, today's stop on sending is lifted. Returns how many.
+ */
+export async function requeueUnsent(db: Db, tenantId: string, since: Date, now: Date): Promise<number> {
+  const rows = await db.tx(tenantId, async (tx) => {
+    await lock(tx, "enquiries", tenantId);
+    return (await tx.query(
+      `update enquiries set status = 'queued', failure = null, approval_id = null
+        where status = 'failed' and coalesce(decided_at, proposed_at) >= $1 and (failure is null or failure like 'mail\\_unreachable%') and sent_at is null and message_id is null
+        returning enquiry_id, business_id`,
+      [since],
+    )).rows;
+  });
+  if (rows.length > 0) {
+    const businessId = rows[0].business_id as string;
+    await db.tx(tenantId, (tx) => emitEvent(tx, { tenantId, businessId, department: DEPARTMENT, type: "stage", reasonCode: "enquiries_requeued", summary: `Enquiries that never reached the mail server were put back in the queue: ${rows.length}`, now }));
+    if (await breakerToday(db, tenantId, now)) await resetBreaker(db, tenantId, businessId, now);
+  }
+  return rows.length;
 }

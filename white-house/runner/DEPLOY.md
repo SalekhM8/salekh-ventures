@@ -32,6 +32,9 @@ Names only. **S** marks a secret.
 | `WH_OUTREACH_SETTINGS_PATCH` | | **The owner's changes to the outreach settings.** One line of base64 of a JSON object holding only what is to change (see below). Checked like any settings, applied once as a new version in the owner's name, and not applied again while it stays the same. Anything wrong in it stops the start. |
 | `WH_OUTREACH_ENABLED_TYPES` | | Optional. A comma separated list of kinds of business to have switched on, and every other kind off: `clinics,solicitors,financial-advisers,estate-agents,accountants,trades`. Applied at each start, as a new version of the settings only when it changes something. Unset: the kinds are left as they are. This is how a kind is switched on the server, which has no shell. |
 | `WH_ROLE` | | `primary` (the default) or `standby`. Exactly one runner may be primary for a given test mailbox. |
+| `MAIL_TRANSPORT` | | `smtp_imap` (the default: SMTP on 465, IMAP on 993, needs `TEST_MAILBOX_APP_PASSWORD`) or `gmail_api` (HTTPS only, needs the three below). **On Railway's Trial and Hobby plans outbound SMTP is blocked: use `gmail_api`.** |
+| `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET`, `GMAIL_OAUTH_REFRESH_TOKEN` | **S** | For `gmail_api`. See "Mail over the Gmail API" below. |
+| `WH_REQUEUE_UNSENT_SINCE` | | Optional, a date `YYYY-MM-DD`. At start, enquiries marked failed since that day that never reached the mail server (or have no recorded reason) go back in the queue, and today's stop on sending is lifted. Remove it afterwards. |
 | `ANTHROPIC_API_KEY_SALEKH` | **S** | The tenant's model key. |
 | `GOOGLE_PLACES_API_KEY` | **S** | Finding businesses. Without it and with no search tool, Outreach cannot run. |
 | `TEST_MAILBOX_ADDRESS`, `TEST_MAILBOX_APP_PASSWORD` | **S** | The test mailbox. Set on the primary only. |
@@ -98,4 +101,43 @@ With `WH_ENQUIRY_RUNG=3`, the log line at start ends "test enquiries set to rung
 - Each shortlist opens with how many were sent without asking. The full text of each is at `GET /v1/rooms/salekh-ventures:outreach/enquiries` (with the token; personal data).
 - Sending stops for the day, and the shortlist opens with the reason, after more than three failed sends or bounces, any reply that reads as a complaint, or the mailbox refusing the login.
 - To go back: set `WH_ENQUIRY_RUNG=2` and redeploy. Anything queued then waits for a yes. The kill switch (`POST /v1/kill-switch`) stops all sending at once without a deploy.
+
+## Mail
+
+At start the primary prints two lines, with an error code and nothing else when something is wrong:
+
+```
+mail transport: gmail_api
+mail out: reachable            (or: unreachable (ETIMEDOUT))
+mail in: reachable
+```
+
+While `mail out` is unreachable no enquiry is attempted, nothing is marked failed, and every shortlist opens with "MAIL CANNOT BE SENT FROM THIS SERVER". It is checked again before every round, so it clears by itself once fixed.
+
+A failed send always leaves its reason: in the service log (`enquiry not sent: mail_unreachable ETIMEDOUT (put back in the queue)` or `enquiry failed to send: send_failed ECONNRESET (not tried again: it may have gone)`), as an event, and on the enquiry.
+
+### Mail over the Gmail API
+
+Needed where only HTTPS can leave the server.
+
+**Google Cloud, once** (signed in as anyone who can own the project; the mailbox itself need not own it):
+
+1. Create a project. Enable the **Gmail API**.
+2. OAuth consent screen: user type **External** (or **Internal** if the test mailbox is in a Google Workspace you administer). Add the two scopes `.../auth/gmail.send` and `.../auth/gmail.readonly`. Add the **test mailbox's address as a test user**.
+3. Credentials: create an **OAuth client ID** of type **Desktop app**. Its id and secret are `GMAIL_OAUTH_CLIENT_ID` and `GMAIL_OAUTH_CLIENT_SECRET`.
+
+**On the Mac, once:**
+
+```sh
+# with GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET in runner/.env or the environment
+npm run build && npm run gmail-authorise
+```
+
+It prints a Google address. Open it in a browser **signed in as the test mailbox**, allow the two permissions, and it writes `GMAIL_OAUTH_REFRESH_TOKEN` into `runner/.env.railway` without printing it. Copy that value, the client id and the secret to the Railway service, set `MAIL_TRANSPORT=gmail_api`, and redeploy. `TEST_MAILBOX_ADDRESS` stays; `TEST_MAILBOX_APP_PASSWORD` is no longer used.
+
+**The catch: a refresh token expires after 7 days while the app's publishing status is "Testing"** (for an External app). Sending would then stop a week later with "the test mailbox refused the login (EAUTH)". To avoid it, either set the app's publishing status to **In production** (for one mailbox and these scopes it can stay unverified: Google shows an "unverified app" warning once at consent, which you accept), or use user type **Internal** with a Workspace mailbox. Then run `npm run gmail-authorise` again, because a token issued while in Testing still expires. I am stating this from Google's documentation as I know it, not from having done it here: check the consent screen's own wording when you set it up.
+
+### Putting back the four from this morning
+
+Set `WH_REQUEUE_UNSENT_SINCE=2026-11-17` (with the transport fixed) and redeploy. The log says how many were put back. Remove the variable afterwards; leaving it does no harm, since a row put back is no longer failed and every failure from now on records its reason.
 

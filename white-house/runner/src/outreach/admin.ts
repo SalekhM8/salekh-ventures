@@ -4,7 +4,7 @@ import { promoteRung, readCurrent, readRung, setConfig, writeVersion } from "../
 import type { Db } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import { companyNumberKey, domainKey } from "./normalise.js";
-import { parseOutreachSettings, type OutreachSettings, FIRST_TYPE_ID, toStoredForm, type BusinessType } from "./settings.js";
+import { parseOutreachSettings, type OutreachSettings, FIRST_TYPE_ID, toStoredForm, type BusinessType, adoptNewDefaults } from "./settings.js";
 import { ENQUIRY_ACTION, ENQUIRY_CAP } from "./enquiries.js";
 import { addSuppression } from "./store.js";
 
@@ -49,7 +49,7 @@ export async function readOutreachSettings(db: Db, tenantId: string, roomId: str
   });
 }
 
-const touchesSetting = (c: SettingsChange) => c.areasPerRun !== undefined || c.batchSize !== undefined || Boolean(c.excludeGroups?.length || c.includeGroups?.length || c.enableTypes?.length || c.disableTypes?.length);
+const touchesSetting = (c: SettingsChange) => c.areasPerRun !== undefined || c.batchSize !== undefined || Boolean(c.adoptNewDefaults || c.excludeGroups?.length || c.includeGroups?.length || c.enableTypes?.length || c.disableTypes?.length);
 
 export interface SettingsChange {
   areasPerRun?: number;
@@ -69,6 +69,8 @@ export interface SettingsChange {
    * The owner's decision. Never past the ceiling fixed in code for the action.
    */
   enquiryRung?: number;
+  /** Take the defaults that have changed in code since the settings were stored, where the stored value is still the old default. */
+  adoptNewDefaults?: boolean;
   /** Kinds of business to switch on or off, by id. "all" stands for every kind in the list. */
   enableTypes?: string[];
   disableTypes?: string[];
@@ -85,7 +87,7 @@ export async function changeOutreachSettings(db: Db, tenantId: string, roomId: s
   }));
   const before = parseOutreachSettings(current.setting);
   // Always written in the current shape: a value stored before there was more than one kind of business is brought up to date here.
-  const next = toStoredForm(before) as Record<string, any>;
+  const next = (change.adoptNewDefaults ? adoptNewDefaults(toStoredForm(before) as Record<string, unknown>, 0).value : toStoredForm(before)) as Record<string, any>;
   const types = (next.business_types as BusinessType[]).map((t) => ({ ...t }));
   next.business_types = types;
   const typeById = (id: string) => {

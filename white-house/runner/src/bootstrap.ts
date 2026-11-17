@@ -5,7 +5,7 @@ import { actionTypes } from "./control/action-types.js";
 import { isUuid } from "./control/db.js";
 import { canonicalJson, hashPayload } from "./control/hash.js";
 import { defaultMigrationsDir, migrate } from "./migrate.js";
-import { parseOutreachSettings, toStoredForm } from "./outreach/settings.js";
+import { adoptNewDefaults, DEFAULTS_VERSION, parseOutreachSettings, toStoredForm } from "./outreach/settings.js";
 import { seed, type CarriedConfig } from "./seed.js";
 
 /**
@@ -239,7 +239,20 @@ async function bringOutreachSettingsUpToDate(client: pg.Client, tenantId: string
   let updated = 0;
   for (const row of rows) {
     const settings = parseOutreachSettings(row.value);
-    const next = toStoredForm(settings) as { business_types: { id: string; enabled: boolean }[] };
+    // Defaults that have changed in code since this value was stored reach it here, once each (see settings.ts).
+    const marker = (await client.query(
+      "select value, version from config_versions where tenant_id = $1 and business_id = $2 and kind = 'setting' and key = 'outreach.defaults' order by version desc limit 1",
+      [tenantId, row.business_id],
+    )).rows[0];
+    const adopted = adoptNewDefaults(toStoredForm(settings) as Record<string, unknown>, Number(marker?.value?.version ?? 0));
+    if (Number(marker?.value?.version ?? 0) < DEFAULTS_VERSION) {
+      await client.query(
+        `insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, reason)
+         values ($1, $2, 'setting', 'outreach.defaults', $3::jsonb, $4, 'system', 'which changes of default have been applied to the stored settings')`,
+        [tenantId, row.business_id, JSON.stringify({ version: DEFAULTS_VERSION }), Number(marker?.version ?? 0) + 1],
+      );
+    }
+    const next = adopted.value as { business_types: { id: string; enabled: boolean }[] };
     if (enabled) {
       const unknown = enabled.filter((id) => !next.business_types.some((t) => t.id === id));
       if (unknown.length > 0) throw new Error(`WH_OUTREACH_ENABLED_TYPES names a kind of business that is not in the settings: ${unknown.join(", ")}`);
@@ -250,7 +263,8 @@ async function bringOutreachSettingsUpToDate(client: pg.Client, tenantId: string
     await client.query(
       `insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, reason)
        values ($1, $2, 'setting', 'outreach', $3::jsonb, $4, 'system', $5)`,
-      [tenantId, row.business_id, JSON.stringify(next), Number(row.version) + 1, enabled ? "kinds of business set from WH_OUTREACH_ENABLED_TYPES at start" : "brought to the current shape at start"],
+      [tenantId, row.business_id, JSON.stringify(next), Number(row.version) + 1,
+       [enabled ? "kinds of business set from WH_OUTREACH_ENABLED_TYPES at start" : null, adopted.moved.length ? `defaults that have changed adopted (${adopted.moved.join(", ")})` : null].filter(Boolean).join("; ") || "brought to the current shape at start"],
     );
     updated += 1;
   }

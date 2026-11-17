@@ -3,6 +3,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import nodemailer from "nodemailer";
 import { ControlError } from "../errors.js";
+import { createGmailApiMailbox } from "./gmail-api.js";
 
 /**
  * The test mailbox: one Gmail account Salekh owns, used for test enquiries
@@ -51,9 +52,26 @@ export interface ReplyQuery {
   since: Date;
 }
 
+export interface MailCheck {
+  /** Can a message be handed to the mail server from here? `code`: the network or login error code when it cannot. */
+  out: { reachable: boolean; code?: string };
+  /** Can the mailbox be read from here? */
+  in: { reachable: boolean; code?: string };
+}
+
 export interface Mailbox {
   readonly address: string;
+  /** Which way it talks to the mail server: "smtp_imap" or "gmail_api". For the log. */
+  readonly transport?: string;
+  /**
+   * Send one message. Three ways it can fail, and they are not alike:
+   *   MailboxUnreachableError  the mail server was never reached. The message CERTAINLY did not go.
+   *   MailboxLoginError        the login was refused. The message certainly did not go.
+   *   anything else            it MAY have gone. The error carries `networkCode` when there is one.
+   */
   send(mail: OutgoingMail): Promise<{ messageId: string }>;
+  /** Open a connection each way, send nothing, read nothing. For the check at start. */
+  check?(): Promise<MailCheck>;
   sentContains(messageId: string): Promise<boolean>;
   findReplies(query: ReplyQuery): Promise<InboundMail[]>;
 }
@@ -66,6 +84,37 @@ export class MailboxLoginError extends ControlError {
     super("mailbox_login_failed", "the test mailbox refused the login");
     this.name = "MailboxLoginError";
   }
+}
+
+/**
+ * The mail server could not be reached at all: the connection was refused, timed out, or the name did not resolve.
+ * Nothing was handed over, so nothing was sent. `code` is the network error code and nothing else.
+ */
+export class MailboxUnreachableError extends ControlError {
+  readonly networkCode: string;
+  constructor(code: string) {
+    super("mail_unreachable", `the mail server could not be reached (${code})`);
+    this.name = "MailboxUnreachableError";
+    this.networkCode = code;
+  }
+}
+
+const CONNECTION_CODES = new Set(["ETIMEDOUT", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "EDNS", "ECONNECTION", "ESOCKET", "ETLS", "EPIPE", "UND_ERR_CONNECT_TIMEOUT"]);
+
+/** An error's own network code, when it has one that is only a code: upper case letters, digits and underscores. Never its words. */
+export function networkCodeOf(err: unknown): string | null {
+  const seen = new Set<unknown>();
+  for (let e: any = err; e && typeof e === "object" && !seen.has(e); e = e.cause) {
+    seen.add(e);
+    for (const value of [e.code, e.errno]) if (typeof value === "string" && /^[A-Z][A-Z0-9_]{2,30}$/.test(value)) return value;
+  }
+  return null;
+}
+
+/** Did the connection itself fail? Then nothing can have been sent. */
+export function isConnectionFailure(err: unknown): boolean {
+  const code = networkCodeOf(err);
+  return code !== null && CONNECTION_CODES.has(code);
 }
 
 /** A refused login, as nodemailer and imapflow report one. Judged from their error codes, never from the server's words. */
@@ -97,20 +146,41 @@ export function createGmailMailbox(options: { address: string; appPassword: stri
   return {
     address: options.address,
 
+    transport: "smtp_imap",
+
     async send(mail) {
-      const transport = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth });
+      const transport = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth, connectionTimeout: 20_000, greetingTimeout: 20_000 });
       // The Message-ID is made here, so the read back check and the reply matcher know it for certain.
       const messageId = `<${randomUUID()}@${domain}>`;
       try {
-        await transport.sendMail({ from: options.address, to: mail.to, subject: mail.subject, text: mail.text, messageId });
-      } catch (err) {
-        // A refused login means the message certainly did not go. Anything else, and it may have.
-        if (isLoginFailure(err)) throw new MailboxLoginError();
-        throw new ControlError("mail_send_failed", "the mail server did not accept the message");
+        // First the connection and the login alone, with nothing handed over. If this fails, the message certainly did not go.
+        try {
+          await transport.verify();
+        } catch (err) {
+          if (isLoginFailure(err)) throw new MailboxLoginError();
+          throw new MailboxUnreachableError(networkCodeOf(err) ?? "ECONNECTION");
+        }
+        try {
+          await transport.sendMail({ from: options.address, to: mail.to, subject: mail.subject, text: mail.text, messageId });
+        } catch (err) {
+          if (isLoginFailure(err)) throw new MailboxLoginError();
+          // The server was reached and spoken to. Whether it took the message cannot be known from here: it may have gone.
+          throw Object.assign(new ControlError("mail_send_failed", "the mail server did not accept the message"), { networkCode: networkCodeOf(err) ?? (typeof (err as any)?.responseCode === "number" ? `SMTP_${(err as any).responseCode}` : null) });
+        }
       } finally {
         transport.close();
       }
       return { messageId };
+    },
+
+    async check() {
+      const transport = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth, connectionTimeout: 15_000, greetingTimeout: 15_000 });
+      const out = await transport.verify().then(() => ({ reachable: true }), (err: unknown) => ({ reachable: false, code: isLoginFailure(err) ? "EAUTH" : (networkCodeOf(err) ?? "ECONNECTION") }));
+      transport.close();
+      const client = new ImapFlow({ host: "imap.gmail.com", port: 993, secure: true, auth, logger: false });
+      const inward = await client.connect().then(() => ({ reachable: true }), (err: unknown) => ({ reachable: false, code: isLoginFailure(err) ? "EAUTH" : (networkCodeOf(err) ?? "ECONNECTION") }));
+      await client.logout().catch(() => undefined);
+      return { out, in: inward };
     },
 
     sentContains(messageId) {
@@ -171,6 +241,21 @@ export function createGmailMailbox(options: { address: string; appPassword: stri
 }
 
 /** No address or no password: no mailbox. Test enquiries are then not drafted, sent or read. */
-export function mailboxFromEnv(address: string | undefined, appPassword: string | undefined): Mailbox | null {
-  return address && appPassword ? createGmailMailbox({ address, appPassword }) : null;
+/**
+ * The test mailbox, from the environment. MAIL_TRANSPORT says which way it talks to the mail server:
+ *   (unset) or smtp_imap   SMTP on 465 and IMAP on 993, with TEST_MAILBOX_APP_PASSWORD. Needs those ports open.
+ *   gmail_api              the Gmail API over HTTPS, with GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET and
+ *                          GMAIL_OAUTH_REFRESH_TOKEN. For a host that lets nothing out but HTTPS.
+ * null: not configured, so no test enquiry is drafted, sent or read.
+ */
+export function mailboxFromEnv(env: Record<string, string | undefined>): Mailbox | null {
+  const address = env.TEST_MAILBOX_ADDRESS;
+  if (!address) return null;
+  const transport = env.MAIL_TRANSPORT ?? "smtp_imap";
+  if (transport === "gmail_api") {
+    const [clientId, clientSecret, refreshToken] = [env.GMAIL_OAUTH_CLIENT_ID, env.GMAIL_OAUTH_CLIENT_SECRET, env.GMAIL_OAUTH_REFRESH_TOKEN];
+    return clientId && clientSecret && refreshToken ? createGmailApiMailbox({ address, clientId, clientSecret, refreshToken }) : null;
+  }
+  if (transport !== "smtp_imap") throw new Error("MAIL_TRANSPORT must be smtp_imap or gmail_api");
+  return env.TEST_MAILBOX_APP_PASSWORD ? createGmailMailbox({ address, appPassword: env.TEST_MAILBOX_APP_PASSWORD }) : null;
 }

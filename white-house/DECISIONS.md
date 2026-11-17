@@ -871,3 +871,41 @@ A run searches one place for every kind that is switched on (the place that kind
 - Results sent before this change have no slot: they are scored and compared as before.
 - "The same day while still shut" is by the calendar day in the tenant's zone.
 
+## First live morning: mail that could not leave the server, and kinds that were not all searched, 17 Nov 2026
+
+### M1. Why a send failed is always on record, and "never reached the server" is not a failure
+
+Four sends failed on the server with no reason logged, and four businesses were marked failed. A send can now end three ways, and they are kept apart:
+
+- **The mail server was never reached** (the connection was refused, timed out, did not resolve). Over SMTP this is now certain, not inferred: the connection and login are made first with nothing handed over, and only then is the message sent. The enquiry goes back in the queue, the business has not been contacted and keeps its one chance, an event `mail_unreachable` records the network error code, and a line goes to stdout. Two in a row (on two rounds, ten minutes apart) stop sending for the day with "the mail server could not be reached from this server (CODE)".
+- **The login was refused.** As before: back in the queue, sending stops for the day.
+- **The server was reached and the send then failed.** It may have gone, so the enquiry is marked failed and never retried, with `failure` set to a fixed code and the network code (`send_failed:ECONNRESET`), an event, and a stdout line.
+
+Only an error's code is ever kept: never the server's words, an address or any text of a message.
+
+### M2. Putting back what never went
+
+`WH_REQUEUE_UNSENT_SINCE=YYYY-MM-DD`, read at start: enquiries marked failed since that day whose failure was that the server was never reached, or has no recorded reason (those from before reasons were kept), go back in the queue, and today's stop on sending is lifted. One that failed after the server was reached is left alone. It is done once in effect: a row put back is no longer failed, and every failure from now on has a reason.
+
+### M3. A check at start
+
+On start as primary, a connection is opened each way with nothing sent or read, and two lines are printed: `mail out: reachable` or `unreachable (CODE)`, and the same for `mail in`. While mail out is unreachable no send is attempted at all (so nothing fails and no breaker trips), the check is made again before each round so it is noticed when it is fixed, and every shortlist opens with "MAIL CANNOT BE SENT FROM THIS SERVER (CODE)".
+
+### M4. A second transport: the Gmail API over HTTPS
+
+`MAIL_TRANSPORT=gmail_api`, with an OAuth client and a refresh token, for a host that lets nothing out but HTTPS. The same interface and the same guarantees as SMTP and IMAP: the message is sent with our own Message-ID and the one Gmail actually stored is read back; "is it in Sent" is a search for exactly that id; replies are found by search only (the conversation our own message is in, kept only where In-Reply-To or References really names our message; and messages from the address written to or the business's own domain, with the address checked again in code because Google's matching is loose). The mailbox is never listed and nothing in it is changed. Scopes: `gmail.send` and `gmail.readonly`, nothing wider. An expired or revoked refresh token is a refused login. `npm run gmail-authorise` fetches the refresh token on a person's own machine (a listener on 127.0.0.1, PKCE and a random state, the two scopes only) and writes it to `runner/.env.railway` without printing it.
+
+**Not tested against Google.** The transport is tested against a stub, as instructed. Two things rest on Google behaving as its documentation says and should be watched on the first real send: that a Message-ID supplied in the raw message is kept (the code reads back whatever Gmail stored, so it copes either way), and that replies land in the same conversation as the sent message.
+
+### M5. The batch is divided between the kinds before finding
+
+"Every kind each run" did not happen: the first kind's results filled the batch of 50 before another was searched. Now each kind switched on gets an equal share of the room in the run; what a kind finds beyond its share is set aside and used only if others leave room; one phrase of each kind is searched in turn. The backlog is drawn one of each kind in turn as well.
+
+### M6. Defaults that change in code now reach stored settings
+
+Settings are stored written out in full, so the raised Places limit (and the wider sending hours) never reached the server's stored values: it was still sending 09:00 to 17:30 on weekdays with a limit of 20. `DEFAULT_CHANGES` in settings.ts lists each changed default with its old value. A stored value still equal to the old default takes the new one, once (the bootstrap keeps a note of which have been applied); a value that differs was a choice and is left alone. Locally: `npm run outreach-settings -- --adopt-new-defaults yes`. **Any future change of a default must be added to that list**, or it will not reach a database that already has settings.
+
+### M7. The shortlist states the windows in force
+
+The line about when enquiries go is now written from the settings in force, slot by slot, not from fixed words.
+

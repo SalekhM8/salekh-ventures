@@ -103,14 +103,14 @@ test("bootstrap: two instances starting together set the database up once; a sec
   // ---- the first boot, by two instances at the same moment ----
   const [one, two] = await Promise.all([boot({ carried: parseCarriedConfig(encode(blob())) }), boot({ carried: parseCarriedConfig(encode(blob())) })]);
   assert.deepEqual([one.tenantId, two.tenantId], [TENANT, TENANT], "the tenant has the id that was given, so it matches the developer's machine");
-  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [13, 1], "each migration applied once; one of the two was the first boot");
+  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [14, 1], "each migration applied once; one of the two was the first boot");
   assert.deepEqual(one.roles, [`${PREFIX}_agent`, `${PREFIX}_gateway`, `${PREFIX}_ui`]);
   const counts = async () => (await bootRows(
     `select (select count(*)::int from tenants) as tenants, (select count(*)::int from businesses) as floors, (select count(*)::int from members) as members,
             (select count(*)::int from config_versions) as config, (select count(*)::int from suppressions) as suppressions, (select count(*)::int from schema_migrations) as migrations,
             (select count(*)::int from prospects) as prospects, (select count(*)::int from approvals) as approvals`))[0];
   const first = await counts();
-  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 13, 0, 0]);
+  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 14, 0, 0]);
   assert.deepEqual(await bootRows("select slug, timezone from tenants"), [{ slug: "fixture-boot", timezone: "Europe/London" }]);
 
   // what was carried is in force, as version 1, and says where it came from
@@ -200,6 +200,27 @@ test("bootstrap: two instances starting together set the database up once; a sec
   ]) await assert.rejects(boot({ settingsPatch: encode(bad) }), why, JSON.stringify(bad));
   await assert.rejects(boot({ settingsPatch: "%%% not base64 json" }), /not base64 JSON/);
   assert.deepEqual(await settingRows(), settled, "a refused patch changed nothing, not even the part of it that was valid");
+
+  // ---- a default that changed in code reaches settings stored with the old one, once ----
+  const latest = async () => (await settingRows()).filter((r) => r.key === "outreach").at(-1);
+  const store = async (over) => {
+    const now = await latest();
+    await bootRows(`insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, reason)
+      select $1, business_id, 'setting', 'outreach', $2::jsonb, $3, 'system', 'test fixture' from businesses where tenant_id = $1 and slug = 'salekh-ventures'`, [TENANT, JSON.stringify({ ...now.value, ...over }), now.version + 1]);
+  };
+  // as the server was: settings written out in full when the defaults were 20 calls and 09:00 to 17:30 on weekdays, and no note of which changes have been applied
+  await store({ max_places_calls_per_run: 20, enquiry_send_from: "09:00", enquiry_send_until: "17:30", enquiry_send_days: [1, 2, 3, 4, 5] });
+  await bootRows("delete from config_versions where tenant_id = $1 and key = 'outreach.defaults'", [TENANT]);
+  assert.equal((await boot()).settingsUpdated, 1);
+  let adopted = await latest();
+  assert.deepEqual([adopted.value.max_places_calls_per_run, adopted.value.enquiry_send_from, adopted.value.enquiry_send_until, adopted.value.enquiry_send_days, adopted.reason],
+    [40, "07:00", "21:30", [1, 2, 3, 4, 5, 6, 7], "defaults that have changed adopted (max_places_calls_per_run, enquiry_send_from, enquiry_send_until, enquiry_send_days)"]);
+  assert.equal((await boot()).settingsUpdated, 0, "once");
+  // put back to the old figure on purpose afterwards: it is a choice now, and stays
+  await store({ max_places_calls_per_run: 20 });
+  assert.equal((await boot()).settingsUpdated, 0);
+  assert.equal((await latest()).value.max_places_calls_per_run, 20);
+  await store({ max_places_calls_per_run: 40 });
 
   // the same slug under another id is refused, not quietly made into a second tenant
   await assert.rejects(boot({ tenantId: "11111111-2222-4333-8444-555555555555" }), /another id/);

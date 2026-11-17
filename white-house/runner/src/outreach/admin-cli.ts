@@ -55,6 +55,7 @@ try {
       else if (flag === "--type") change.typeId = value;
       else if (flag === "--allow-enquiries") change.allowEnquiries = value === "yes";
       else if (flag === "--enquiry-rung") change.enquiryRung = Number(value);
+      else if (flag === "--adopt-new-defaults") change.adoptNewDefaults = value === "yes";
       else throw new Error(`unknown option ${flag}`);
     }
     const now = Object.keys(change).length ? await changeOutreachSettings(db, tenantId, room, change) : await readOutreachSettings(db, tenantId, room);

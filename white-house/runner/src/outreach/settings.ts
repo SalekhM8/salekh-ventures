@@ -438,6 +438,34 @@ function withType(stored: Stored, type: BusinessType): OutreachSettings {
   return { ...stored, type, business_type: type.name, excluded_groups: type.excluded_groups, enquiry_forbidden_words: type.forbidden_topics, leak_assumptions: type.leak_assumptions, job_search_hint: type.job_search_hint };
 }
 
+/**
+ * DEFAULTS THAT HAVE CHANGED. Settings are stored written out in full, so a default changed in code does not reach
+ * a value already stored. Each entry here says: a stored value still equal to the OLD default was never a choice,
+ * and takes the new one. A stored value that differs from the old default was somebody's choice and is left alone.
+ * Each entry is applied once, by its number, which is kept beside the settings (bootstrap) or asked for outright
+ * (`npm run outreach-settings -- --adopt-new-defaults yes`).
+ */
+export const DEFAULT_CHANGES: { since: number; key: string; was: unknown; now: unknown }[] = [
+  { since: 1, key: "max_places_calls_per_run", was: 20, now: 40 },
+  { since: 1, key: "enquiry_send_from", was: "09:00", now: "07:00" },
+  { since: 1, key: "enquiry_send_until", was: "17:30", now: "21:30" },
+  { since: 1, key: "enquiry_send_days", was: [1, 2, 3, 4, 5], now: [1, 2, 3, 4, 5, 6, 7] },
+];
+export const DEFAULTS_VERSION = Math.max(...DEFAULT_CHANGES.map((c) => c.since));
+
+/** Apply the default changes numbered above `after` to a stored value. Returns the value and which keys moved. */
+export function adoptNewDefaults(stored: Record<string, unknown>, after: number): { value: Record<string, unknown>; moved: string[] } {
+  const value = { ...stored };
+  const moved: string[] = [];
+  for (const change of DEFAULT_CHANGES) {
+    if (change.since > after && JSON.stringify(value[change.key]) === JSON.stringify(change.was)) {
+      value[change.key] = change.now;
+      moved.push(change.key);
+    }
+  }
+  return { value, moved };
+}
+
 /** The same settings, seen for one kind of business. An id that is no longer in the list (a kind since removed) falls back to the first. */
 export function forType(settings: OutreachSettings, typeId: string | null | undefined): OutreachSettings {
   if (settings.type.id === typeId) return settings;

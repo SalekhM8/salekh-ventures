@@ -440,9 +440,12 @@ export function countWaiting(db: Db, scope: { tenantId: string; businessId: stri
 export function listForAnalysis(db: Db, scope: ProspectScope, limit: number): Promise<ProspectRow[]> {
   return db.tx(scope.tenantId, async (tx) =>
     (await tx.query(
-      // Those found from a front desk advert first: they are the ones most likely to pass. The rest fill the batch.
-      `select ${COLUMNS} from prospects where business_id = $1 and stage = 'found'
-        order by (signals @> '[{"signal": "hiring_front_desk"}]'::jsonb) desc, found_at, prospect_id limit $2`,
+      // The batch is shared between the kinds of business: one of each kind in turn, so no kind's backlog waits behind
+      // another's. Within a kind, those found from a front desk advert first: they are the most likely to pass.
+      `select ${COLUMNS} from (
+         select *, row_number() over (partition by business_type order by (signals @> '[{"signal": "hiring_front_desk"}]'::jsonb) desc, found_at, prospect_id) as turn
+           from prospects where business_id = $1 and stage = 'found') waiting
+        order by turn, (signals @> '[{"signal": "hiring_front_desk"}]'::jsonb) desc, found_at, prospect_id limit $2`,
       [scope.businessId, limit],
     )).rows.map(toRow));
 }

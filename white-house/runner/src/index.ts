@@ -83,7 +83,11 @@ function buildRuntime() {
   const reach = agentReachFromEnv(env.AGENT_REACH_BIN);
   if (!reach) console.log("The search tool is not installed here (AGENT_REACH_BIN is not set, or nothing is at that path): job adverts are not searched. Outreach runs on Google Places and direct reading.");
   if (role === "standby") console.log("WH_ROLE=standby: this runner starts no runs, sends nothing and does not look in the mailbox.");
-  if (!env.TEST_MAILBOX_ADDRESS || !env.TEST_MAILBOX_APP_PASSWORD) console.log("TEST_MAILBOX_ADDRESS and TEST_MAILBOX_APP_PASSWORD are not both set: no test enquiry will be drafted, sent or read.");
+  const mailbox = mailboxFromEnv(env);
+  if (!mailbox) console.log(env.MAIL_TRANSPORT === "gmail_api"
+    ? "TEST_MAILBOX_ADDRESS, GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET and GMAIL_OAUTH_REFRESH_TOKEN are not all set: no test enquiry will be drafted, sent or read."
+    : "TEST_MAILBOX_ADDRESS and TEST_MAILBOX_APP_PASSWORD are not both set: no test enquiry will be drafted, sent or read.");
+  else console.log(`mail transport: ${mailbox.transport ?? "smtp_imap"}`);
   if (!env.GOOGLE_PLACES_API_KEY) console.log("GOOGLE_PLACES_API_KEY is not set: businesses are found by web search, as before.");
   if (!env.COMPANIES_HOUSE_API_KEY) console.log("COMPANIES_HOUSE_API_KEY is not set: companies will be recorded as not checked.");
 
@@ -103,7 +107,7 @@ function buildRuntime() {
     // Pages are read directly, and through the search tool only as a fallback. DIRECT_READ=off goes back to the search tool alone.
     directReader: env.DIRECT_READ === "off" ? null : createDirectReader(),
     // The test mailbox: read here, by the runner, and given to nothing but the gateway's mail connector.
-    mailbox: mailboxFromEnv(env.TEST_MAILBOX_ADDRESS, env.TEST_MAILBOX_APP_PASSWORD),
+    mailbox,
     // Read at the moment of each run, so a key added later needs no restart of anything but this process's env.
     apiKeyFor: (tenantSlug) => env[apiKeyEnvName(tenantSlug)] || undefined,
     usdToGbp: rate,
@@ -122,12 +126,27 @@ server.listen(port, host, () => {
   console.log(`white-house-runner listening on ${host}:${port}${runtime ? " (API v1 on)" : ""}`);
   // One mailbox, one owner: a standby runs no schedule, sends nothing and does not look in the mailbox.
   if (role === "standby") return;
+  // Can mail leave this server, and can the mailbox be read from it? One line each, with the error code and nothing else.
+  // Then, if asked, enquiries that never reached the mail server are put back in the queue. Both before anything is sent.
   built?.scheduler.start(60_000);
-  // Every ten minutes: look for replies to the enquiries this system sent, and send any approved enquiry that was held over.
   if (runtime) {
-    const look = () => void runtime.collectReplies().catch((err) => console.error(`reply check failed: ${err instanceof Error ? err.name : "error"}`));
-    setInterval(look, 10 * 60_000).unref();
-    look();
+    void (async () => {
+      const mail = await runtime.checkMail().catch(() => null);
+      if (mail) {
+        console.log(`mail out: ${mail.out.reachable ? "reachable" : `unreachable (${mail.out.code ?? "unknown"})`}`);
+        console.log(`mail in: ${mail.in.reachable ? "reachable" : `unreachable (${mail.in.code ?? "unknown"})`}`);
+        if (!mail.out.reachable) console.log("No enquiry will be attempted until mail can leave this server. If outbound SMTP is blocked here, set MAIL_TRANSPORT=gmail_api (see DEPLOY.md).");
+      }
+      const since = env.WH_REQUEUE_UNSENT_SINCE;
+      if (since) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) console.error("WH_REQUEUE_UNSENT_SINCE must be a date written YYYY-MM-DD. Nothing was put back.");
+        else console.log(`enquiries that never reached the mail server since ${since}, put back in the queue: ${await runtime.requeueUnsent(new Date(`${since}T00:00:00Z`)).catch(() => 0)}`);
+      }
+      // Every ten minutes: look for replies to the enquiries this system sent, and send whatever is due.
+      const look = () => void runtime.collectReplies().catch((err) => console.error(`reply check failed: ${err instanceof Error ? err.name : "error"}`));
+      setInterval(look, 10 * 60_000).unref();
+      look();
+    })();
   }
 });
 

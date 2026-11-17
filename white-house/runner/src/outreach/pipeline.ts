@@ -74,6 +74,8 @@ export interface OutreachContext {
   gateway: Gateway;
   /** Called when enquiries have been queued or put forward, so the sender can start on those that need no yes. */
   afterEnquiries?: () => void;
+  /** The error code from the last check, when mail cannot be sent from where this runs. null: it can. */
+  mailOut?: () => string | null;
   changed: () => void;
 }
 
@@ -579,22 +581,39 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   };
   /** Google Places, for each place in today's rotation. Plain code, no model call, no web search. */
   const placesRoute = async (findRunId: string, cap: number): Promise<void> => {
+      // THE BATCH IS DIVIDED BETWEEN THE KINDS BEFORE ANYTHING IS LOOKED FOR. Each kind switched on gets an equal share
+      // of the room in this run, so one kind's results cannot fill it before another is searched. What a kind finds
+      // beyond its share is kept to one side, and used only if the others leave room.
+      const kindsHere = [...new Set(pairs.map((pair) => pair.typeId))];
+      const share = Math.max(1, Math.floor(cap / Math.max(1, kindsHere.length)));
+      const foundOf = new Map<string, number>();
+      const spare = new Map<string, { place: Place; area: string }[]>();
       const tokens = new Map<string, string | null>();
-      // One (kind, place) pair at a time, one search per phrase of that kind. The first page of every phrase comes
-      // before the second page of any, so a run's allowance of calls is spread across the kinds, not spent on one.
+      const most = Math.max(0, ...kindsHere.map((id) => forType(settings, id).type.search_phrases.length));
+      // One phrase of each kind in turn, the first page of every phrase before the second page of any: the run's
+      // allowance of calls is spread across the kinds as well.
       for (const page of [0, 1, 2]) {
-        for (const pair of pairs) {
-          for (const phrase of forType(settings, pair.typeId).type.search_phrases) {
+        for (let n = 0; n < most; n += 1) {
+          for (const pair of pairs) {
+            const phrase = forType(settings, pair.typeId).type.search_phrases[n];
+            if (!phrase || tally.found >= cap || (foundOf.get(pair.typeId) ?? 0) >= share) continue;
             const key = `${pair.typeId}|${pair.area}|${phrase}`;
-            if (tally.found >= cap || (page > 0 && !tokens.get(key))) continue;
+            if (page > 0 && !tokens.get(key)) continue;
             const token = tokens.get(key);
             const got = await askPlaces({ query: `${phrase} in ${pair.area}`, pageSize: 20, ...(token ? { pageToken: token } : {}) }, pair.typeId);
             tokens.set(key, got?.nextPageToken ?? null);
             for (const found of got?.places ?? []) {
-              if (tally.found >= cap) break;
-              await recordPlace(found, pair.area, findRunId, pair.typeId);
+              if (tally.found >= cap || (foundOf.get(pair.typeId) ?? 0) >= share) { spare.set(pair.typeId, [...(spare.get(pair.typeId) ?? []), { place: found, area: pair.area }]); continue; }
+              if (await recordPlace(found, pair.area, findRunId, pair.typeId)) foundOf.set(pair.typeId, (foundOf.get(pair.typeId) ?? 0) + 1);
             }
           }
+        }
+      }
+      // A kind that found fewer than its share passes the rest on: the others' spare results fill it, one kind in turn.
+      for (let turn = 0; tally.found < cap && [...spare.values()].some((list) => list.length > turn); turn += 1) {
+        for (const [typeId, list] of spare) {
+          const more = list[turn];
+          if (more && tally.found < cap) await recordPlace(more.place, more.area, findRunId, typeId);
         }
       }
       if (tally.no_website > 0) notes.push(`${tally.no_website} businesses found by Google Places have no website. They are recorded so they are not found again, but they cannot be analysed or tested by email.`);
@@ -913,6 +932,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     sent_without_asking: await sentWithoutAsking(db, scope(lastRunId), clock()),
     stopped: await breakerToday(db, tenantId, clock()),
     room: `${ctx.businessSlug}:${DEPARTMENT}`,
+    mail_out: ctx.mailOut?.() ?? null,
   };
   const day = await db.tx(tenantId, (tx) => tenantDay(tx, clock()));
   const money = Object.fromEntries(
@@ -971,6 +991,19 @@ function resultFacts(t: TestedProspect): string[] {
     ...(first?.answered ? [`The reply ${first.answered.value ? "answered" : "did not answer"} the question asked.`] : []),
     ...(first?.next_step ? [`The reply ${first.next_step.value ? "offered" : "did not offer"} a next step.`] : []),
   ];
+}
+
+/** The windows enquiries go in, read from the settings in force, in plain words. */
+export function sendingWindows(settings: OutreachSettings): string {
+  const DAY = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const days = (list: number[]) => (list.length === 7 ? "every day" : list.length === 5 && [1, 2, 3, 4, 5].every((d) => list.includes(d)) ? "Monday to Friday" : [...list].sort().map((d) => DAY[d]).join(", ") || "no day");
+  const others = [1, 2, 3, 4, 5, 6, 7].filter((d) => !settings.working_days.includes(d) && settings.enquiry_send_days.includes(d));
+  const slots: Record<string, string> = {
+    in_hours: `working hours (${settings.working_hours_from} to ${settings.working_hours_until}, ${days(settings.working_days.filter((d) => settings.enquiry_send_days.includes(d)))})`,
+    evening: `evenings (${settings.working_hours_until} to ${settings.enquiry_send_until} on the same days)`,
+    weekend: `the weekend (${settings.working_hours_from} to ${settings.working_hours_until}, ${days(others)}${settings.non_working_dates.length ? ", and on the non-working dates set" : ""})`,
+  };
+  return `They go ${days(settings.enquiry_send_days)} between ${settings.enquiry_send_from} and ${settings.enquiry_send_until}, each in its own slot: ${settings.enquiry_slots.map((slot) => slots[slot]).join("; ")}.`;
 }
 
 /** "Sent Tuesday 19:42, when they were closed", in the tenant's own time. */
@@ -1065,7 +1098,7 @@ const shown = (value: unknown): string => {
 export function renderShortlist(
   title: string, settings: OutreachSettings, tally: Tally, cards: Card[],
   costs: Record<string, any>, fetches: FetchCounts, notes: string[], companiesHouseChecked: boolean, areas: string[],
-  enquiries: { waiting_for_approval: number; approved_not_sent: number; queued_to_send?: number; sent_awaiting: number; scored: number; sent_without_asking?: { total: number; by_kind: Record<string, number>; ids?: string[] }; rung?: number; stopped?: string | null; room?: string } | null,
+  enquiries: { waiting_for_approval: number; approved_not_sent: number; queued_to_send?: number; sent_awaiting: number; scored: number; sent_without_asking?: { total: number; by_kind: Record<string, number>; ids?: string[] }; rung?: number; stopped?: string | null; room?: string; mail_out?: string | null } | null,
   timezone = "Europe/London",
 ): string {
   const filtered = Object.entries(tally.filtered_out).sort(([a], [b]) => a.localeCompare(b));
@@ -1076,11 +1109,12 @@ export function renderShortlist(
     `Looking for ${settings.business_types.filter((t) => t.enabled).map((t) => t.name).join("; ") || "nothing: no kind of business is switched on"} in ${settings.area}. Searched this run: ${areas.join(", ") || "nowhere new"}.`, "",
     ...(enquiries
       ? [
+          ...(enquiries.mail_out ? [`**MAIL CANNOT BE SENT FROM THIS SERVER (${enquiries.mail_out}).** No enquiry is being sent, and none is being attempted. Those queued wait, untouched. This line stays until it is fixed.`, ""] : []),
           ...(enquiries.stopped ? [`**SENDING IS STOPPED FOR TODAY: ${enquiries.stopped}.** Nothing more is sent until tomorrow. Look at this before then.`, ""] : []),
           ...(enquiries.rung !== undefined && enquiries.rung >= 3
             ? [`**Sent without asking since the last shortlist was written: ${enquiries.sent_without_asking?.total ?? 0}**` +
                 `${(enquiries.sent_without_asking?.total ?? 0) > 0 ? ` (${Object.entries(enquiries.sent_without_asking?.by_kind ?? {}).map(([kind, n]) => `${kind} ${n}`).join(", ")})` : ""}. ` +
-                `Test enquiries send themselves, inside the daily limit, every day between ${settings.enquiry_send_from} and ${settings.enquiry_send_until}, spread across working hours, weekday evenings and weekends. ` +
+                `Test enquiries send themselves, inside the daily limit. ${sendingWindows(settings)} ` +
                 `The full text of each, and who it went to, is in the room's list of sent enquiries (GET /v1/rooms/${enquiries.room ?? "<room>"}/enquiries).`, ""]
             : []),
           `**Test enquiries:** ${enquiries.waiting_for_approval} waiting for your approval, ${enquiries.approved_not_sent} approved and waiting to be sent, ` +

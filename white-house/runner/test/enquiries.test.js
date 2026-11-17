@@ -7,7 +7,13 @@ import { asModelAnswer, makeHouse } from "./house-helpers.js";
 import { createScriptedModel } from "../dist/agents/model-caller.js";
 import { DEFAULT_OUTREACH_SETTINGS as S } from "../dist/outreach/settings.js";
 import { asksNotToBeContacted, captureFor, captureScore, estimateLeak, isAutomatic, isBounce, lintEnquiry, nextOpening, readsAsComplaint, scoreAfter, sentOutOfHours, serviceFor, slotAt, usefulOutOfHours, withinSendingHours } from "../dist/outreach/enquiry-rules.js";
-import { MailboxLoginError } from "../dist/control/connectors/mailbox.js";
+import { isConnectionFailure, mailboxFromEnv, MailboxLoginError, MailboxUnreachableError, networkCodeOf } from "../dist/control/connectors/mailbox.js";
+import { createGmailApiMailbox, GMAIL_SCOPES, toRfc822 } from "../dist/control/connectors/gmail-api.js";
+import { consentUrl, writeEnvValue } from "../dist/gmail-authorise.js";
+import { requeueUnsent } from "../dist/outreach/enquiries.js";
+import { sendingWindows } from "../dist/outreach/pipeline.js";
+import { adoptNewDefaults, DEFAULTS_VERSION } from "../dist/outreach/settings.js";
+import { listForAnalysis } from "../dist/outreach/store.js";
 import { lintDraft } from "../dist/outreach/score.js";
 import { ENQUIRY_ACTION, ENQUIRY_CAP, proposeEnquiry } from "../dist/outreach/enquiries.js";
 import { changeOutreachSettings, readOutreachSettings } from "../dist/outreach/admin.js";
@@ -149,8 +155,10 @@ function fakeMailbox() {
   const box = {
     address: "fixture-test-mailbox@example.test", sent: [], inbox: [], opened: [], failSend: false,
     async send(mail) {
+      box.attempts = (box.attempts ?? 0) + 1;
       if (box.loginFails) throw new MailboxLoginError();
-      if (box.failSend) throw new Error(`fixture smtp failure for ${mail.to}`);
+      if (box.unreachable) throw new MailboxUnreachableError(box.unreachable);
+      if (box.failSend) throw Object.assign(new Error(`fixture smtp failure for ${mail.to}`), box.failCode ? { networkCode: box.failCode } : {});
       const messageId = `<fixture-${box.sent.length + 1}-${Math.random().toString(36).slice(2)}@example.test>`;
       box.sent.push({ ...mail, messageId });
       return { messageId };
@@ -1649,7 +1657,7 @@ test("at rung 3 enquiries send themselves, inside the hours, one at a time, with
   assert.equal(mailbox.sent.length, 2, "nothing goes out in the evening");
   let out = await lastOutput(x);
   // the digest opens the shortlist: what went since the last one, by kind, and where the full text is
-  assert.match(out.body, /\*\*Sent without asking since the last shortlist was written: \d\*\*( \(clinics \d\))?\. Test enquiries send themselves, inside the daily limit, every day between 07:00 and 21:30, spread across working hours, weekday evenings and weekends\. The full text of each, and who it went to, is in the room's list of sent enquiries \(GET \/v1\/rooms\/fixture-floor-one:outreach\/enquiries\)\./);
+  assert.match(out.body, /\*\*Sent without asking since the last shortlist was written: \d\*\*( \(clinics \d\))?\. Test enquiries send themselves, inside the daily limit\. They go every day between 07:00 and 21:30, each in its own slot: working hours \(09:00 to 17:30, Monday to Friday\)\. The full text of each, and who it went to, is in the room's list of sent enquiries \(GET \/v1\/rooms\/fixture-floor-one:outreach\/enquiries\)\./);
   assert.match(out.body, /\*\*Test enquiries:\*\* 0 waiting for your approval, 0 approved and waiting to be sent, 1 queued to send without asking, 2 sent and inside their 24 hours/);
   // Sending goes on behind the run, so an enquiry is told of on the shortlist being written when it went, or on the next:
   // between them, each exactly once, and with no name or address in it.
@@ -1827,7 +1835,7 @@ test("circuit breakers: too many failed sends, a complaint, or the mailbox refus
   c.x.w.clock.advance(HOUR);
   await run(c.x);
   out = await lastOutput(c.x);
-  assert.match(out.body, /\*\*SENDING IS STOPPED FOR TODAY: the test mailbox refused the login\.\*\*/);
+  assert.match(out.body, /\*\*SENDING IS STOPPED FOR TODAY: the test mailbox refused the login \(EAUTH\)\.\*\*/);
   assert.equal((await control.listEvents(h.gatewayDb, { tenantId: c.x.w.tenantId })).filter((e) => e.type === "execution_failed").length, 1, "tried once, not once per enquiry");
   c.mailbox.loginFails = false;
   c.x.w.clock.advance(24 * HOUR);
@@ -2049,8 +2057,9 @@ test("every kind switched on is searched on every run, with the calls to Places 
   });
   await run(t.x);
   assert.deepEqual(asked, [
-    "private dental and aesthetics clinics in Fixtureton", "conveyancing solicitors in Fixtureton", "family law solicitors in Fixtureton",
-    "kitchen fitters in Fixtureton", "bathroom fitters in Fixtureton", "roofing contractors in Fixtureton", "driveway installers in Fixtureton", "solar panel installers in Fixtureton",
+    // one phrase of each kind in turn, so a limit on calls would fall on the kinds evenly
+    "private dental and aesthetics clinics in Fixtureton", "conveyancing solicitors in Fixtureton", "kitchen fitters in Fixtureton",
+    "family law solicitors in Fixtureton", "bathroom fitters in Fixtureton", "roofing contractors in Fixtureton", "driveway installers in Fixtureton", "solar panel installers in Fixtureton",
   ], "room for one place, three kinds on: each kind is searched anyway, and the kind that is off is not");
   let out = await lastOutput(t.x);
   assert.deepEqual(out.data.places, { calls: 8, not_made_at_limit: 0, failed: 0, by_kind: { clinics: 1, solicitors: 2, trades: 5 }, limit: 40, price_tier: "Text Search Enterprise" });
@@ -2061,4 +2070,294 @@ test("every kind switched on is searched on every run, with the calls to Places 
   t.x.w.clock.advance(24 * HOUR);
   await run(t.x);
   assert.deepEqual([asked.length, asked.every((q) => q.endsWith(" in Fixtureham"))], [8, true]);
+});
+
+// ---- a send that never reached the mail server ----
+
+test("a send that never reached the mail server is not a failed enquiry: it goes back in the queue, the reason is on record with its error code, and two in a row stop sending", async () => {
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => { logged.push(args.join(" ")); };
+  try {
+    const t = await house({ rung: 3 });
+    const { x, mailbox } = t;
+    const made = [];
+    for (const key of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]) made.push(await clinic(t, key));
+    mailbox.unreachable = "ETIMEDOUT";
+    await run(x);
+    assert.equal(mailbox.attempts, 1, "after one that could not reach the server, the round ends: the rest are not thrown at it");
+    // the next ten minute round tries once more, and that is the second in a row
+    for (let round = 0; round < 3; round += 1) { x.runtime.sendDue(); await x.runtime.idle(); }
+    assert.equal(mailbox.attempts, 2, "two in a row, and it is not tried a third time: four businesses are not burnt finding out");
+    assert.deepEqual((await enquiries(x)).map((e) => [e.status, e.failure, e.sent_at]), Array(6).fill(["queued", null, null]), "nothing went, so nothing is marked failed and every business keeps its one chance");
+    assert.equal((await rows(h, "select 1 from prospects where tenant_id = $1 and test_result is not null", [x.w.tenantId])).length, 0, "no business is counted as contacted");
+    const events = await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId, withPayload: true });
+    const notSent = events.filter((e) => e.reasonCode === "mail_unreachable");
+    assert.deepEqual([notSent.length, notSent[0].summary, notSent[0].payload], [2, "An enquiry was not sent: the mail server could not be reached. It was put back in the queue", { code: "ETIMEDOUT" }]);
+    const stop = events.filter((e) => e.reasonCode === "enquiry_breaker_mail_unreachable");
+    assert.deepEqual([stop.length, stop[0].summary], [1, "Sending stopped for today: the mail server could not be reached from this server (ETIMEDOUT)"]);
+    // the service's own log says why, with the code and nothing that identifies anybody
+    assert.deepEqual(logged.filter((l) => /mail_unreachable/.test(l)), ["enquiry not sent: mail_unreachable ETIMEDOUT (put back in the queue)", "enquiry not sent: mail_unreachable ETIMEDOUT (put back in the queue)", "sending stopped for today: mail_unreachable (ETIMEDOUT)"]);
+    assert.ok(!logged.join("\n").includes("@") && !JSON.stringify(events).includes(made[0].email));
+    x.w.clock.advance(HOUR);
+    await run(x);
+    assert.match((await lastOutput(x)).body, /\*\*SENDING IS STOPPED FOR TODAY: the mail server could not be reached from this server \(ETIMEDOUT\)\.\*\*/);
+    assert.equal(mailbox.attempts, 2);
+    // the next day, with the server reachable again, all six go
+    mailbox.unreachable = null;
+    x.w.clock.advance(24 * HOUR);
+    x.runtime.sendDue();
+    await x.runtime.idle();
+    assert.equal(mailbox.sent.length, 6);
+
+    // ---- a send that failed AFTER the mail server was reached may have gone: it is marked failed, with its code, and never retried ----
+    const u = await house({ rung: 3 });
+    const one = await clinic(u, "alpha");
+    u.mailbox.failSend = true;
+    u.mailbox.failCode = "ECONNRESET";
+    await run(u.x);
+    assert.deepEqual((await enquiries(u.x)).map((e) => [e.status, e.failure]), [["failed", "send_failed:ECONNRESET"]]);
+    const failed = (await control.listEvents(h.gatewayDb, { tenantId: u.x.w.tenantId, withPayload: true })).filter((e) => e.reasonCode === "enquiry_send_failed");
+    assert.deepEqual([failed.length, failed[0].summary, failed[0].payload], [1, "An enquiry failed to send after the mail server was reached. It is not tried again: it may have gone", { code: "ECONNRESET" }]);
+    assert.ok(logged.includes("enquiry failed to send: send_failed ECONNRESET (not tried again: it may have gone)"));
+    assert.ok(one.id);
+  } finally {
+    console.error = original;
+  }
+  // which errors mean "never reached", judged by code alone
+  const err = (code, cause) => Object.assign(new Error("SECRET words from a server"), { code, ...(cause ? { cause } : {}) });
+  assert.deepEqual(["ETIMEDOUT", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENOTFOUND", "ECONNECTION", "EDNS"].map((c) => isConnectionFailure(err(c))), Array(7).fill(true));
+  assert.deepEqual(["EAUTH", "EENVELOPE", "EMESSAGE", undefined].map((c) => isConnectionFailure(err(c))), Array(4).fill(false));
+  assert.deepEqual([networkCodeOf(err(undefined, err("ECONNREFUSED"))), networkCodeOf(err("not a code; SECRET")), networkCodeOf(new Error("x")), networkCodeOf(null)], ["ECONNREFUSED", null, null, null]);
+});
+
+test("enquiries marked failed that never reached the mail server are put back once, on request, and sending is allowed again; one that may have gone is left alone", async () => {
+  const t = await house({ rung: 3 });
+  const { x, mailbox } = t;
+  const made = [];
+  for (const key of ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"]) made.push(await clinic(t, key));
+  // as it was on the server: four marked failed with no reason recorded, and the breaker tripped
+  mailbox.failSend = true;
+  await run(x);
+  await h.admin.query("update enquiries set failure = null where tenant_id = $1 and status = 'failed'", [x.w.tenantId]);
+  const failed = (await enquiries(x)).filter((e) => e.status === "failed");
+  assert.equal(failed.length, 4);
+  // one of the four is known to have reached the server, and one failed last week
+  await h.admin.query("update enquiries set failure = 'send_failed:ECONNRESET' where enquiry_id = $1", [failed[0].enquiry_id]);
+  await h.admin.query("update enquiries set decided_at = decided_at - interval '7 days', proposed_at = proposed_at - interval '7 days' where enquiry_id = $1", [failed[1].enquiry_id]);
+  mailbox.failSend = false;
+  x.w.clock.advance(HOUR);
+  const today = new Date("2026-11-16T00:00:00Z");
+  assert.equal(await x.runtime.requeueUnsent(today), 2, "the two that never reached the server, since the day given");
+  assert.deepEqual((await enquiries(x)).map((e) => e.status).sort(), ["failed", "failed", "queued", "queued", "queued", "queued", "queued"]);
+  const events = await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId });
+  assert.ok(events.some((e) => e.summary === "Enquiries that never reached the mail server were put back in the queue: 2"));
+  assert.ok(events.some((e) => e.reasonCode === "enquiry_breaker_reset"), "today's stop is lifted, since what caused it has been put right");
+  x.runtime.sendDue();
+  await x.runtime.idle();
+  assert.equal(mailbox.sent.length, 5, "the two put back and the three that were waiting all go, the same day");
+  assert.equal(await x.runtime.requeueUnsent(today), 0, "a second time there is nothing to put back: it happens once");
+  assert.deepEqual((await enquiries(x)).filter((e) => e.status === "failed").map((e) => e.failure).sort(), [null, "send_failed:ECONNRESET"], "the one from last week and the one that may have gone are left alone");
+  // a stop after the reset is a stop again
+  const next = await clinic(t, "theta");
+  mailbox.unreachable = "ECONNREFUSED";
+  await proposeEnquiry(h.gatewayDb, x.runtime.gateway, t.scope, (await prospectsByIds(h.gatewayDb, t.scope, [next.id]))[0], GOOD, x.w.clock.now(), "prospect", "dental implants", "in_hours");
+  for (let i = 0; i < 2; i += 1) { x.runtime.sendDue(); await x.runtime.idle(); }
+  x.w.clock.advance(HOUR);
+  await run(x);
+  assert.match((await lastOutput(x)).body, /SENDING IS STOPPED FOR TODAY: the mail server could not be reached from this server \(ECONNREFUSED\)/);
+});
+
+test("the check at start: when mail cannot leave this server no send is attempted at all, the shortlist says so until it is fixed, and sending resumes when it is", async () => {
+  const state = { out: { reachable: false, code: "ETIMEDOUT" }, in: { reachable: true } };
+  let checks = 0;
+  const box = fakeMailbox();
+  box.check = async () => { checks += 1; return state; };
+  const t = await house({ rung: 3, mailbox: box });
+  const { x } = t;
+  assert.deepEqual(await x.runtime.checkMail(), { out: { reachable: false, code: "ETIMEDOUT" }, in: { reachable: true } });
+  await clinic(t, "alpha");
+  await run(x);
+  assert.deepEqual([box.attempts ?? 0, (await enquiries(x)).map((e) => e.status)], [0, ["queued"]], "queued, untouched, and no attempt made");
+  let out = await lastOutput(x);
+  assert.match(out.body, /\*\*MAIL CANNOT BE SENT FROM THIS SERVER \(ETIMEDOUT\)\.\*\* No enquiry is being sent, and none is being attempted\. Those queued wait, untouched\. This line stays until it is fixed\./);
+  assert.ok(out.body.indexOf("MAIL CANNOT BE SENT") < out.body.indexOf("- Found:"));
+  assert.equal(out.data.enquiries.mail_out, "ETIMEDOUT");
+  assert.ok(checks >= 2, "it is looked at again before each round, so it is noticed when it is fixed");
+  assert.ok(!(await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId })).some((e) => (e.reasonCode ?? "").startsWith("enquiry_breaker")), "no breaker: nothing was tried, so nothing failed");
+  // fixed (the transport was changed, say): the next round sends, and the line goes
+  state.out = { reachable: true };
+  x.runtime.sendDue();
+  await x.runtime.idle();
+  assert.equal(box.sent.length, 1);
+  x.w.clock.advance(HOUR);
+  await run(x);
+  out = await lastOutput(x);
+  assert.ok(!out.body.includes("MAIL CANNOT BE SENT") && out.data.enquiries.mail_out === null);
+  // a standby, or no mailbox, checks nothing
+  const idle = await house({ rung: 3, mailbox: null });
+  assert.equal(await idle.x.runtime.checkMail(), null);
+});
+
+// ---- the Gmail API transport ----
+
+test("the Gmail API transport: HTTPS only, the same three things as the mailbox over SMTP and IMAP, and never a listing of the mailbox", async () => {
+  const calls = [];
+  const OUR = "<our-message@fixture-mailbox.example.test>";
+  const mailboxOf = { // what is in the mailbox, as the API would give it
+    sent1: { id: "sent1", threadId: "t1", internalDate: "1000", payload: { headers: [{ name: "Message-ID", value: OUR }, { name: "From", value: "Fixture <fixture-test-mailbox@example.test>" }] } },
+    reply1: { id: "reply1", threadId: "t1", internalDate: String(Date.parse("2026-11-16T10:20:00Z")), snippet: "snip", payload: { mimeType: "multipart/alternative", headers: [
+      { name: "Message-ID", value: "<reply-1@fixture-alpha.example.test>" }, { name: "From", value: "Reception <Hello@Fixture-Alpha.example.test>" }, { name: "In-Reply-To", value: OUR }, { name: "Subject", value: "Re: Price" }, { name: "Auto-Submitted", value: "auto-replied" }],
+      parts: [{ mimeType: "text/plain", body: { data: Buffer.from("REPLY-TEXT Implants are from a fixture price.").toString("base64url") } }, { mimeType: "text/html", body: { data: "PGI-" } }] } },
+    // in the same conversation by Gmail's own threading, but it does not name our message: not kept
+    stray: { id: "stray", threadId: "t1", internalDate: String(Date.parse("2026-11-16T11:00:00Z")), payload: { headers: [{ name: "From", value: "someone@elsewhere.example.test" }, { name: "Message-ID", value: "<stray@x>" }] } },
+    bySender: { id: "bySender", threadId: "t9", internalDate: String(Date.parse("2026-11-16T12:00:00Z")), payload: { mimeType: "text/plain", body: { data: Buffer.from("SENDER-TEXT Hello again.").toString("base64url") }, headers: [{ name: "From", value: "sam@fixture-alpha.example.test" }, { name: "Message-ID", value: "<later@fixture-alpha.example.test>" }, { name: "Subject", value: "Your enquiry" }] } },
+    // Google's search matched it loosely: the address is another's, so it is not kept
+    lookalike: { id: "lookalike", threadId: "t8", internalDate: String(Date.parse("2026-11-16T12:30:00Z")), payload: { headers: [{ name: "From", value: "x@notfixture-alpha.example.test.evil.example" }, { name: "Message-ID", value: "<l@x>" }] } },
+    unrelated: { id: "unrelated", threadId: "t7", payload: { headers: [{ name: "From", value: "friend@elsewhere.example.test" }] }, snippet: "UNRELATED-SECRET" },
+  };
+  let respond = null;
+  const fetchStub = async (url, init = {}) => {
+    const u = new URL(url);
+    calls.push({ url: `${u.origin}${u.pathname}`, q: u.searchParams.get("q"), method: init.method ?? "GET", body: init.body, auth: init.headers?.authorization });
+    const over = respond?.(u, init);
+    if (over) return over;
+    const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+    if (u.host === "oauth2.googleapis.com") return json({ access_token: "ACCESS-TOKEN-FIXTURE", expires_in: 3600 });
+    if (u.pathname.endsWith("/messages/send")) return json({ id: "sent1", threadId: "t1" });
+    if (u.pathname.endsWith("/profile")) return json({ emailAddress: "fixture-test-mailbox@example.test" });
+    if (u.pathname.endsWith("/messages")) {
+      const q = u.searchParams.get("q");
+      if (q === `rfc822msgid:${OUR} in:sent` || q === `rfc822msgid:${OUR}`) return json({ messages: [{ id: "sent1", threadId: "t1" }] });
+      if (q.startsWith("from:hello@fixture-alpha.example.test after:")) return json({ messages: [] });
+      if (q.startsWith("from:fixture-alpha.example.test after:")) return json({ messages: [{ id: "bySender", threadId: "t9" }, { id: "lookalike", threadId: "t8" }] });
+      return json({});
+    }
+    if (u.pathname.endsWith("/threads/t1")) return json({ messages: [mailboxOf.sent1, mailboxOf.reply1, mailboxOf.stray] });
+    const id = u.pathname.split("/").at(-1);
+    return mailboxOf[id] ? json(mailboxOf[id]) : json({}, 404);
+  };
+  const box = createGmailApiMailbox({ address: "fixture-test-mailbox@example.test", clientId: "CLIENT-ID", clientSecret: "CLIENT-SECRET", refreshToken: "REFRESH-TOKEN", fetch: fetchStub, now: () => Date.parse("2026-11-16T10:00:00Z") });
+  assert.equal(box.transport, "gmail_api");
+  assert.deepEqual([...GMAIL_SCOPES], ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"], "sending and reading, and nothing wider");
+
+  // ---- send ----
+  const sent = await box.send({ to: "hello@fixture-alpha.example.test", subject: "Price of implants", text: "Hello,\n\nHow much are implants?\n\nSalekh" });
+  assert.equal(sent.messageId, OUR, "the Message-ID Gmail actually gave it is read back, and is what replies are recognised by");
+  assert.deepEqual(calls.map((c) => [c.method, c.url]), [
+    ["POST", "https://oauth2.googleapis.com/token"], ["POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"], ["GET", "https://gmail.googleapis.com/gmail/v1/users/me/messages/sent1"],
+  ]);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(calls[0].body)), { grant_type: "refresh_token", client_id: "CLIENT-ID", client_secret: "CLIENT-SECRET", refresh_token: "REFRESH-TOKEN" });
+  assert.equal(calls[1].auth, "Bearer ACCESS-TOKEN-FIXTURE");
+  const raw = Buffer.from(JSON.parse(calls[1].body).raw, "base64url").toString("utf8");
+  assert.match(raw, /^From: fixture-test-mailbox@example\.test\r\nTo: hello@fixture-alpha\.example\.test\r\nSubject: Price of implants\r\nMessage-ID: <[0-9a-f-]{36}@example\.test>\r\nDate: Mon, 16 Nov 2026 10:00:00 \+0000\r\nMIME-Version: 1\.0\r\nContent-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n/);
+  assert.equal(Buffer.from(raw.split("\r\n\r\n")[1].replace(/\r\n/g, ""), "base64").toString("utf8"), "Hello,\n\nHow much are implants?\n\nSalekh");
+  // nothing in a subject or an address can add a header of its own
+  const forged = toRfc822("a@x.example.test", { to: "b@y.example.test\r\nBcc: victim@z.example.test", subject: "Hi\r\nBcc: other@z.example.test", text: "x" }, "<m@x>", new Date(0));
+  assert.equal(forged.split("\r\n").filter((line) => /^bcc:/i.test(line)).length, 0);
+  assert.match(toRfc822("a@x.example.test", { to: "b@y.example.test", subject: "Prix d’implants", text: "x" }, "<m@x>", new Date(0)), /Subject: =\?UTF-8\?B\?/);
+
+  // ---- read back, and replies: searches only ----
+  calls.length = 0;
+  assert.equal(await box.sentContains(OUR), true);
+  assert.deepEqual(calls.map((c) => c.q), [`rfc822msgid:${OUR} in:sent`], "a search for exactly that message, with the token still held from before");
+  calls.length = 0;
+  const replies = await box.findReplies({ messageId: OUR, address: "hello@fixture-alpha.example.test", ownDomain: "fixture-alpha.example.test", since: new Date("2026-11-16T10:00:00Z") });
+  assert.deepEqual(replies.map((r) => [r.messageId, r.from, r.matchedBy, r.text, r.headers]), [
+    ["<reply-1@fixture-alpha.example.test>", "hello@fixture-alpha.example.test", "header", "REPLY-TEXT Implants are from a fixture price.", { "auto-submitted": "auto-replied" }],
+    ["<later@fixture-alpha.example.test>", "sam@fixture-alpha.example.test", "sender", "SENDER-TEXT Hello again.", {}],
+  ], "the reply that names our message, and one from the business's own domain. Not the stray in the same conversation, not the lookalike address");
+  assert.equal(replies[0].receivedAt.toISOString(), "2026-11-16T10:20:00.000Z");
+  const since = Math.floor(Date.parse("2026-11-16T10:00:00Z") / 1000);
+  assert.deepEqual(calls.filter((c) => c.q !== null).map((c) => c.q), [`rfc822msgid:${OUR}`, `from:hello@fixture-alpha.example.test after:${since}`, `from:fixture-alpha.example.test after:${since}`]);
+  assert.ok(calls.every((c) => c.q !== null || /\/(threads\/t1|messages\/(bySender|lookalike))$/.test(c.url)), `only the conversation our message is in and the messages the searches returned were opened: ${JSON.stringify(calls.map((c) => c.url))}`);
+  assert.ok(!calls.some((c) => c.url.endsWith("/messages") && (c.q === null || c.q === "")), "the mailbox is never listed");
+  assert.ok(!calls.some((c) => c.url.includes("unrelated")) && !JSON.stringify(replies).includes("UNRELATED"));
+  assert.ok(!calls.some((c) => ["POST", "PUT", "DELETE", "PATCH"].includes(c.method)), "reading changes nothing");
+
+  // ---- how it fails ----
+  assert.deepEqual(await box.check(), { out: { reachable: true }, in: { reachable: true } });
+  const fresh = (over) => createGmailApiMailbox({ address: "fixture-test-mailbox@example.test", clientId: "c", clientSecret: "s", refreshToken: "r", fetch: async (url, init) => over(new URL(url), init) ?? fetchStub(url, init) });
+  const mail = { to: "hello@fixture-alpha.example.test", subject: "s", text: "t" };
+  // the refresh token has expired or been revoked: a refused login. Nothing went.
+  const revoked = fresh((u) => (u.host === "oauth2.googleapis.com" ? new Response(JSON.stringify({ error: "invalid_grant", error_description: "SECRET-WORDS" }), { status: 400 }) : null));
+  await assert.rejects(revoked.send(mail), (err) => err instanceof MailboxLoginError && !err.message.includes("SECRET"));
+  assert.deepEqual(await revoked.check(), { out: { reachable: false, code: "EAUTH" }, in: { reachable: false, code: "EAUTH" } });
+  // Google could not be reached at all: nothing went
+  const cut = fresh(() => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED 1.2.3.4:443"), { code: "ECONNREFUSED" }) }); });
+  await assert.rejects(cut.send(mail), (err) => err instanceof MailboxUnreachableError && err.networkCode === "ECONNREFUSED" && !err.message.includes("1.2.3.4"));
+  assert.deepEqual((await cut.check()).out, { reachable: false, code: "ECONNREFUSED" });
+  // Google was reached and refused the message itself: it may or may not have gone, so it is a failed send with its code
+  const refused = fresh((u) => (u.pathname.endsWith("/messages/send") ? new Response(JSON.stringify({ error: { message: "SECRET-BODY" } }), { status: 500 }) : null));
+  await assert.rejects(refused.send(mail), (err) => err.code === "mail_send_failed" && err.networkCode === "HTTP_500" && !err.message.includes("SECRET"));
+
+  // ---- which transport, from the environment ----
+  const env = { TEST_MAILBOX_ADDRESS: "fixture-test-mailbox@example.test", TEST_MAILBOX_APP_PASSWORD: "fixture-app-password", GMAIL_OAUTH_CLIENT_ID: "c", GMAIL_OAUTH_CLIENT_SECRET: "s", GMAIL_OAUTH_REFRESH_TOKEN: "r" };
+  assert.deepEqual([mailboxFromEnv(env).transport, mailboxFromEnv({ ...env, MAIL_TRANSPORT: "gmail_api" }).transport, mailboxFromEnv({ ...env, MAIL_TRANSPORT: "smtp_imap" }).transport], ["smtp_imap", "gmail_api", "smtp_imap"]);
+  assert.deepEqual([mailboxFromEnv({}), mailboxFromEnv({ ...env, MAIL_TRANSPORT: "gmail_api", GMAIL_OAUTH_REFRESH_TOKEN: "" }), mailboxFromEnv({ TEST_MAILBOX_ADDRESS: "a@b.example.test" })], [null, null, null]);
+  assert.throws(() => mailboxFromEnv({ ...env, MAIL_TRANSPORT: "carrier-pigeon" }), /smtp_imap or gmail_api/);
+
+  // ---- the helper that fetches the refresh token: two permissions, an answer that must match the request, a file only its owner can read ----
+  const url = new URL(consentUrl({ clientId: "CLIENT-ID", redirectUri: "http://127.0.0.1:53999", state: "STATE", challenge: "CHALLENGE" }));
+  assert.deepEqual([url.origin + url.pathname, Object.fromEntries(url.searchParams)], ["https://accounts.google.com/o/oauth2/v2/auth", {
+    client_id: "CLIENT-ID", redirect_uri: "http://127.0.0.1:53999", response_type: "code", scope: "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
+    access_type: "offline", prompt: "consent", state: "STATE", code_challenge: "CHALLENGE", code_challenge_method: "S256",
+  }]);
+  const { mkdtempSync, readFileSync, statSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const file = `${mkdtempSync(`${tmpdir()}/wh-authorise-`)}/.env.railway`;
+  writeFileSync(file, "WH_ROLE=primary\nGMAIL_OAUTH_REFRESH_TOKEN=old-token\nPORT=8080\n");
+  writeEnvValue(file, "GMAIL_OAUTH_REFRESH_TOKEN", "new-token");
+  writeEnvValue(file, "MAIL_TRANSPORT", "gmail_api");
+  assert.equal(readFileSync(file, "utf8"), "WH_ROLE=primary\nGMAIL_OAUTH_REFRESH_TOKEN=new-token\nPORT=8080\nMAIL_TRANSPORT=gmail_api\n");
+  assert.equal(statSync(file).mode & 0o077, 0, "nobody but its owner can read it");
+});
+
+// ---- the batch is shared between the kinds ----
+
+test("the batch is divided between the kinds before anything is looked for, a kind that finds fewer passes its share on, and the backlog is drawn the same way", async () => {
+  const many = (kind, n) => Array.from({ length: n }, (_, i) => toPlace({ ...rawPlace(`${kind}${String.fromCharCode(97 + i)}`), id: `place-${kind}-${i}`, displayName: { text: `Fixture ${kind} ${i}` }, websiteUri: `https://fixture-${kind}-${i}.example.test/` }));
+  const asked = [];
+  const places = { searchText: async (search) => {
+    asked.push(search.query);
+    if (search.query.startsWith("private dental")) return { places: many("clinic", 20), nextPageToken: null };
+    if (search.query.startsWith("conveyancing")) return { places: many("law", 20), nextPageToken: null };
+    if (search.query.startsWith("kitchen")) return { places: many("trade", 2), nextPageToken: null };
+    return { places: [], nextPageToken: null };
+  } };
+  const t = await house({ places, reach: null, directReader: null, settings: { find_per_run: 12, business_types: [{ id: "clinics" }, { id: "solicitors" }, { id: "trades" }] } });
+  // (no reader in this house: the run stops after finding, which is all this is about)
+  const x = await makeHouse(h, { outreach: { budget: 5, settings: { area: "Fixtureshire", areas: ["Fixtureton"], areas_per_run: 1, find_per_run: 12, business_types: [{ id: "clinics" }, { id: "solicitors" }, { id: "trades" }], min_seconds_between_fetches: 0 } },
+    model: createScriptedModel(async () => ({ error: "api_error" })), reach: { jobs: async () => [], webSearch: async () => [], webRead: async () => null }, places, server: false, sleep: async () => {} });
+  open.push(x);
+  await x.runtime.startRun(ROOM, {});
+  await x.runtime.idle();
+  const found = Object.fromEntries((await rows(h, "select business_type, count(*)::int as n from prospects where tenant_id = $1 group by 1", [x.w.tenantId])).map((r) => [r.business_type, r.n]));
+  assert.deepEqual(found, { clinics: 5, solicitors: 5, trades: 2 }, "twelve places in the batch and three kinds: four each. The trade found only two, so the other two took one more each. Before, the first kind would have taken all twelve");
+  assert.ok(asked.includes("kitchen fitters in Fixtureton") && asked.includes("conveyancing solicitors in Fixtureton"), "every kind was searched although the first kind alone could have filled the batch");
+  assert.ok(t.x);
+
+  // the backlog: one of each kind in turn, however many of one kind are waiting, with advert-led ones first within a kind
+  const scope = { tenantId: x.w.tenantId, businessId: x.w.businessId, runId: null };
+  const next = (await listForAnalysis(h.gatewayDb, scope, 7)).map((p) => p.typeId);
+  assert.deepEqual([next.slice(0, 3).sort(), next.slice(3, 6).sort(), next.length], [["clinics", "solicitors", "trades"], ["clinics", "solicitors", "trades"], 7], "one of each kind, then one of each again (the trade has only two waiting)");
+  assert.deepEqual((await listForAnalysis(h.gatewayDb, scope, 50)).length, 12);
+});
+
+test("a default that has changed in code reaches settings stored with the old default, once, and leaves alone a value somebody chose", () => {
+  const stored = { max_places_calls_per_run: 20, enquiry_send_from: "09:00", enquiry_send_until: "17:30", enquiry_send_days: [1, 2, 3, 4, 5], areas: ["Fixtureton"] };
+  const first = adoptNewDefaults(stored, 0);
+  assert.deepEqual([first.value, first.moved], [{ max_places_calls_per_run: 40, enquiry_send_from: "07:00", enquiry_send_until: "21:30", enquiry_send_days: [1, 2, 3, 4, 5, 6, 7], areas: ["Fixtureton"] }, ["max_places_calls_per_run", "enquiry_send_from", "enquiry_send_until", "enquiry_send_days"]]);
+  // a value that is not the old default was a choice
+  const chosen = adoptNewDefaults({ ...stored, max_places_calls_per_run: 25, enquiry_send_until: "18:00" }, 0);
+  assert.deepEqual([chosen.value.max_places_calls_per_run, chosen.value.enquiry_send_until, chosen.moved], [25, "18:00", ["enquiry_send_from", "enquiry_send_days"]]);
+  // once applied, a value put back to the old figure on purpose stays there
+  assert.deepEqual(adoptNewDefaults(stored, DEFAULTS_VERSION), { value: stored, moved: [] });
+  assert.equal(DEFAULTS_VERSION, 1);
+
+  // the shortlist states the windows actually in force, whatever they are
+  assert.equal(sendingWindows(S), "They go every day between 07:00 and 21:30, each in its own slot: working hours (09:00 to 17:30, Monday to Friday); evenings (17:30 to 21:30 on the same days); the weekend (09:00 to 17:30, Saturday, Sunday).");
+  const other = parseOutreachSettings({ enquiry_send_from: "08:00", enquiry_send_until: "20:00", working_hours_until: "18:00", enquiry_slots: ["in_hours", "evening"], enquiry_send_days: [1, 2, 3, 4, 5], non_working_dates: ["2026-12-25"] });
+  assert.equal(sendingWindows(other), "They go Monday to Friday between 08:00 and 20:00, each in its own slot: working hours (09:00 to 18:00, Monday to Friday); evenings (18:00 to 20:00 on the same days).");
+  assert.ok(!/09:00 and 17:30/.test(sendingWindows(S)), "not the old window");
 });
