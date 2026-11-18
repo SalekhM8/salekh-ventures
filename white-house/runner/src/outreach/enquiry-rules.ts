@@ -291,7 +291,10 @@ export function benchmarkFrom(
   // Cheapest first, so the sources are listed in the same order every time.
   const list = [...found].sort((a, b) => a.amount - b.amount || a.source_url.localeCompare(b.source_url));
   if (list.length < MIN_PRICES_FOR_MEDIAN) return { amount: null, service: self.service };
-  return { amount: median(list.map((o) => o.amount)), count: list.length, scope, service: self.service, kind: settings.type.name, area: scope === "nearby" ? self.area : null, sources: list.map((o) => o.source_url) };
+  // The LOWEST published price, not the middle one (owner, 18 Nov 2026): a rival's "dental implants" price can be a
+  // full-mouth package at many times a single implant, and an estimate must never be inflated by that. The lowest
+  // keeps a borrowed figure on the cautious side.
+  return { amount: Math.min(...list.map((o) => o.amount)), count: list.length, scope, service: self.service, kind: settings.type.name, area: scope === "nearby" ? self.area : null, sources: list.map((o) => o.source_url) };
 }
 
 const listSources = (sources: string[]): string => {
@@ -342,7 +345,7 @@ export function estimateLeak(
         const whose = b.scope === "nearby"
           ? `${b.count} nearby ${b.kind}${b.area ? ` in ${b.area}` : ""}`
           : `${b.count} ${b.kind} across every area searched`;
-        return `${pounds(b.amount)}: the median published price of ${whose} for ${b.service}${b.scope === "nearby" ? "" : `, as fewer than ${MIN_PRICES_FOR_MEDIAN} nearby publish one`} (sources: ${listSources(b.sources)}). ` +
+        return `${pounds(b.amount)}: the lowest published price among ${whose} for ${b.service}${b.scope === "nearby" ? "" : `, as fewer than ${MIN_PRICES_FOR_MEDIAN} nearby publish one`} (sources: ${listSources(b.sources)}). ` +
           "They publish no price of their own (ASSUMPTION: that they charge about the same)";
       })();
   return {

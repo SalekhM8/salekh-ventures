@@ -783,11 +783,11 @@ test("the shortlist rule: capture at or below the threshold and fit; a low estim
   // five hours, the same day in London: 22 + 0 + 0 + 8 of 100
   assert.deepEqual([p3.stage, Number(p3.capture_score)], ["shortlisted", 30]);
   const cardsBy = Object.fromEntries(out.data.cards.map((c) => [c.prospect_id, [c.capture_score, c.estimated_leak && { low: c.estimated_leak.low, high: c.estimated_leak.high, basis: c.estimated_leak.basis }]]));
-  // the one with no price of its own: the median of 100 and 4,000 is 2,050; 2,050 x 20 x 0.1 x 0.1 = 410, 2,050 x 60 x 0.3 x 0.25 = 9,225
-  assert.deepEqual([cardsBy[cheap.id], cardsBy[unpriced.id], cardsBy[slowish.id]], [[8, { low: 20, high: 450, basis: "own_price" }], [8, { low: 410, high: 9225, basis: "nearby_median" }], [30, { low: 800, high: 18000, basis: "own_price" }]], "everyone tested gets a card, a low estimate too (owner, 18 Nov 2026)");
+  // the one with no price of its own: the lowest of 100 and 4,000 is 100; 100 x 20 x 0.1 x 0.1 = 20, 100 x 60 x 0.3 x 0.25 = 450
+  assert.deepEqual([cardsBy[cheap.id], cardsBy[unpriced.id], cardsBy[slowish.id]], [[8, { low: 20, high: 450, basis: "own_price" }], [8, { low: 20, high: 450, basis: "nearby_median" }], [30, { low: 800, high: 18000, basis: "own_price" }]], "everyone tested gets a card, a low estimate too (owner, 18 Nov 2026)");
   assert.equal(out.data.cards.at(-1).prospect_id, slowish.id, "the weakest at capturing comes first");
-  assert.ok(out.body.includes("Workings: £2,050: the median published price of 2 nearby private dental and aesthetics clinics in Fixtureton for dental implants (sources: https://fixture-alpha.example.test/prices, https://fixture-gamma.example.test/prices). They publish no price of their own (ASSUMPTION: that they charge about the same) × 20 to 60 enquiries a month (ASSUMPTION)"), out.body);
-  assert.ok(out.body.includes("- Estimated leak: £410 to £9,225 a month (estimate)"));
+  assert.ok(out.body.includes("Workings: £100: the lowest published price among 2 nearby private dental and aesthetics clinics in Fixtureton for dental implants (sources: https://fixture-alpha.example.test/prices, https://fixture-gamma.example.test/prices). They publish no price of their own (ASSUMPTION: that they charge about the same) × 20 to 60 enquiries a month (ASSUMPTION)"), out.body);
+  assert.ok(out.body.includes("- Estimated leak: £20 to £450 a month (estimate)"));
   assert.ok(out.body.includes(`<!-- prospect:${unpriced.id} -->`), "each card carries its business's id, for the call list");
   const drafts = t.requests.filter((r) => r.stage === "draft");
   assert.ok(drafts.length >= 3);
@@ -2700,7 +2700,7 @@ test("the leak: their own price comes first; else the median of nearby rivals' p
   const own = { amount: 3000, source_url: "https://fixture-own.example.test/prices" };
   const rival = (area, amount, service = "dental implants", key = String(amount)) => ({ area, amount, service, source_url: `https://fixture-${key}.example.test/prices` });
   const near = benchmarkFrom({ area: "Fixtureton", service: "dental implants" }, [rival("Fixtureton", 2000), rival("Fixtureton", 2600), rival("Fixtureton", 9000), rival("Fixtureton", 50, "teeth whitening"), rival("Elsewhere", 1)], clinics);
-  assert.deepEqual([near.amount, near.count, near.scope, near.area], [2600, 3, "nearby", "Fixtureton"], "the middle of the three nearby for the same service; another service and another place are not counted");
+  assert.deepEqual([near.amount, near.count, near.scope, near.area], [2000, 3, "nearby", "Fixtureton"], "the lowest of the three nearby for the same service; another service and another place are not counted");
 
   // their own price is used whenever they publish one
   const mine = estimateLeak(own, { minutesToReply: null }, clinics, near);
@@ -2709,17 +2709,17 @@ test("the leak: their own price comes first; else the median of nearby rivals' p
 
   // none of their own: the nearby median, said as such, with every source, and every assumption still labelled
   const borrowed = estimateLeak(null, { minutesToReply: null }, clinics, near);
-  assert.deepEqual([borrowed.estimated, borrowed.low, borrowed.high, borrowed.basis], [true, 520, 11700, "nearby_median"]);
+  assert.deepEqual([borrowed.estimated, borrowed.low, borrowed.high, borrowed.basis], [true, 400, 9000, "nearby_median"]);
   assert.equal(borrowed.workings,
-    "£2,600: the median published price of 3 nearby private dental and aesthetics clinics in Fixtureton for dental implants (sources: https://fixture-2000.example.test/prices, https://fixture-2600.example.test/prices, https://fixture-9000.example.test/prices). " +
-    "They publish no price of their own (ASSUMPTION: that they charge about the same) × 20 to 60 enquiries a month (ASSUMPTION) × 10% to 30% lost to a slow or missing reply (ASSUMPTION) × 10% to 25% that would have bought (ASSUMPTION) = £520 to £11,700 a month");
+    "£2,000: the lowest published price among 3 nearby private dental and aesthetics clinics in Fixtureton for dental implants (sources: https://fixture-2000.example.test/prices, https://fixture-2600.example.test/prices, https://fixture-9000.example.test/prices). " +
+    "They publish no price of their own (ASSUMPTION: that they charge about the same) × 20 to 60 enquiries a month (ASSUMPTION) × 10% to 30% lost to a slow or missing reply (ASSUMPTION) × 10% to 25% that would have bought (ASSUMPTION) = £400 to £9,000 a month");
 
   // fewer than two nearby: the same kind and service in every area searched, said as such
   const wide = benchmarkFrom({ area: "Fixtureton", service: "dental implants" }, [rival("Fixtureton", 2000), rival("Elsewhere", 3000), rival("Further", 5000)], clinics);
-  assert.deepEqual([wide.amount, wide.count, wide.scope, wide.area], [3000, 3, "all_areas", null]);
+  assert.deepEqual([wide.amount, wide.count, wide.scope, wide.area], [2000, 3, "all_areas", null]);
   const wideLeak = estimateLeak(null, { minutesToReply: null }, clinics, wide);
   assert.equal(wideLeak.basis, "kind_median");
-  assert.match(wideLeak.workings, /^£3,000: the median published price of 3 private dental and aesthetics clinics across every area searched for dental implants, as fewer than 2 nearby publish one \(sources: .+\)\. They publish no price of their own \(ASSUMPTION: that they charge about the same\) × 20 to 60 enquiries a month \(ASSUMPTION\)/);
+  assert.match(wideLeak.workings, /^£2,000: the lowest published price among 3 private dental and aesthetics clinics across every area searched for dental implants, as fewer than 2 nearby publish one \(sources: .+\)\. They publish no price of their own \(ASSUMPTION: that they charge about the same\) × 20 to 60 enquiries a month \(ASSUMPTION\)/);
   assert.equal(median([1, 2, 3, 10]), 2.5);
 
   // fewer than two anywhere: no figure, and nothing made up
@@ -2748,10 +2748,10 @@ test("the leak's prices come from the master list: same kind, same service, own 
   await area(far2.id, "Further");
   const bench = (id) => h.gatewayDb.tx(t.x.w.tenantId, (tx) => priceBenchmark(tx, id, forType(S, "clinics")));
   let b = await bench(target.id);
-  assert.deepEqual([b.amount, b.count, b.scope, [...b.sources].sort()], [3000, 3, "all_areas", [near1.site, far1.site, far2.site].map((s) => `${s}prices`).sort()], "one nearby is too few, so every area: 1,000, 3,000 and 5,000");
+  assert.deepEqual([b.amount, b.count, b.scope, [...b.sources].sort()], [1000, 3, "all_areas", [near1.site, far1.site, far2.site].map((s) => `${s}prices`).sort()], "one nearby is too few, so every area: the lowest of 1,000, 3,000 and 5,000");
   await area(far1.id, "Fixtureton");
   b = await bench(target.id);
-  assert.deepEqual([b.amount, b.count, b.scope], [2000, 2, "nearby"], "two nearby are enough: the median of 1,000 and 3,000");
+  assert.deepEqual([b.amount, b.count, b.scope], [1000, 2, "nearby"], "two nearby are enough: the lowest of 1,000 and 3,000");
   await h.admin.query("update prospects set analysis = analysis - 'highest_value_price' where prospect_id = any ($1)", [[far1.id, far2.id]]);
   b = await bench(target.id);
   assert.deepEqual(b, { amount: null, service: "dental implants" }, "one price left anywhere: no figure");
