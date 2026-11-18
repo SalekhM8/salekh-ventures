@@ -632,11 +632,13 @@ function Outcome({
               </p>
             </fieldset>
           )}
-          <button type="button" onClick={() => void submit()} disabled={busy} style={{ ...pill, background: C.ink, color: C.surface, justifySelf: "start" }}>
+          <button type="button" onClick={() => { if (picked === "not_interested" && !window.confirm("Never contact them again? This can't be undone.")) return; void submit(); }} disabled={busy} style={{ ...pill, background: picked === "not_interested" ? "#B3261E" : C.ink, color: C.surface, justifySelf: "start" }}>
             {busy ? "Saving…" : `Save: ${LABEL[picked]}`}
           </button>
           {picked === "not_interested" && (
-            <p style={{ font: `400 13px/1.45 ${SANS}`, color: "#7a6a62" }}>Saving this also means they are never sent another test enquiry.</p>
+            <p style={{ font: `600 13.5px/1.45 ${SANS}`, color: "#B3261E" }}>
+              This means never contact them again, and it can&apos;t be undone. If they asked you to email them, pick Call back or Interested instead and add the address.
+            </p>
           )}
         </div>
       )}

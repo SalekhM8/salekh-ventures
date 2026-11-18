@@ -77,6 +77,9 @@ export function checkRecipient(value: unknown): { ok: true; to: Recipient | null
 
 // ---- the code checks ------------------------------------------------------------------
 
+/** The one link a follow-up may carry: Salekh's own site, added by code (owner, 18 Nov 2026). */
+export const SITE_LINE = "You can see the agents I run working round the clock here: https://www.salekhventures.com";
+const withoutSite = (text: string) => text.split(SITE_LINE).join("");
 const LINK = /https?:\/\/|\bwww\.|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|co\.uk|org\.uk|uk|org|net|io|ai|app|dev|info|biz)\b|@/i;
 const MONEY_OR_SHARE = /[£$€%]|\bper ?cent\b|\bpercent\b|\bGBP\b/i;
 
@@ -107,7 +110,7 @@ export function lintFollowup(draft: { subject: string; body: string }, to: strin
   if (wordCount(body) >= MAX_WORDS_WITH_FINDINGS) problems.push(`the message is ${wordCount(body)} words: it must be under ${MAX_WORDS_WITH_FINDINGS}`);
   if (body && !isSigned(body)) problems.push(`it is not signed "${SIGNATURE}" on its last line`);
   if (MONEY_OR_SHARE.test(`${subject}\n${body}`)) problems.push("it has a money figure or a percentage in it (£, $, €, % or per cent)");
-  if (LINK.test(`${subject}\n${body}`)) problems.push("it has a link, a web address or an email address in it");
+  if (LINK.test(withoutSite(`${subject}\n${body}`))) problems.push("it has a link, a web address or an email address in it (other than the line to salekhventures.com)");
   if (to !== null && !EMAIL.test(to)) problems.push("the address it would go to is not a valid email address");
   return problems;
 }
@@ -587,7 +590,7 @@ export function createFollowups(deps: FollowupDeps) {
         }
         const drafted = made.draft as { subject: string; body: string };
         const timezone = (await t.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0]?.timezone ?? "Europe/London";
-        const draftRow = { subject: drafted.subject, body: withFindings(drafted.body, findingsBlock({ name: p.name, area: p.search_area ?? p.area ?? null, test }, found.rivals, timezone)) };
+        const draftRow = { subject: drafted.subject, body: withFindings(drafted.body, [findingsBlock({ name: p.name, area: p.search_area ?? p.area ?? null, test }, found.rivals, timezone), SITE_LINE].filter(Boolean).join("\n\n")) };
         await t.query(
           `insert into followups (followup_id, tenant_id, business_id, prospect_id, call_outcome_id, outcome, to_name, to_address, subject, body, problems, status, created_at, updated_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'draft', $12, $12)`,
