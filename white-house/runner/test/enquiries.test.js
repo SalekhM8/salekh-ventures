@@ -484,7 +484,7 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
   const draftRequest = t.requests.filter((r) => r.stage === "draft").find((r) => r.user.includes("Nobody replied in the first 24 hours."));
   assert.ok(draftRequest.user.includes("A TEST ENQUIRY WAS SENT") && draftRequest.user.includes("Nobody replied in the first 24 hours.") && draftRequest.user.includes(GOOD.body));
   assert.ok(!/£|13,500|leak/i.test(draftRequest.user), "the drafting model is never given the estimate");
-  assert.deepEqual(out.data.cards.map((c) => [c.prospect_id, c.capture_score, c.reissue, c.estimated_leak]), [[alpha.id, 8, false, { low: 600, high: 13500 }], [beta.id, 88, false, null]], "worst first; the one that answered well is shown too (owner, 18 Nov 2026)");
+  assert.deepEqual(out.data.cards.map((c) => [c.prospect_id, c.capture_score, c.reissue, c.estimated_leak && [c.estimated_leak.low, c.estimated_leak.high, c.estimated_leak.basis]]), [[alpha.id, 8, false, [600, 13500, "own_price"]], [beta.id, 88, false, null]], "worst first; the one that answered well is shown too (owner, 18 Nov 2026)");
   // its rival is now put forward for the same kind of enquiry, and still needs a yes
   list = await enquiries(x);
   assert.deepEqual(list.map((e) => [e.name, e.purpose, e.status]), [["Fixture Alpha Dental", "prospect", "sent"], ["Fixture Beta Dental", "prospect", "sent"], ["Fixture Zeta Dental", "rival", "proposed"]]);
@@ -765,7 +765,7 @@ test("the shortlist rule: capture at or below the threshold and fit; a low estim
   const t = await house({ hooks: { reply: async () => ({ from_a_person: true, asks_not_to_be_contacted: false, answered_the_question: { value: false, quote: null }, offered_a_next_step: { value: false, quote: null } }) } });
   const { x, mailbox } = t;
   const cheap = await clinic(t, "alpha", { price: 100 });   // no reply, but the estimate tops out at 100 x 60 x 0.3 x 0.25 = 450
-  const unpriced = await clinic(t, "beta");                  // no reply, no published price: judged without an estimate
+  const unpriced = await clinic(t, "beta");                  // no reply, no published price: the median of the two nearby that publish one
   const slowish = await clinic(t, "gamma", { price: 4000 }); // a person replied after five hours, saying little
   await run(x);
   await approveAll(x);
@@ -782,10 +782,16 @@ test("the shortlist rule: capture at or below the threshold and fit; a low estim
   assert.deepEqual([p2.stage, Number(p2.capture_score)], ["shortlisted", 8]);
   // five hours, the same day in London: 22 + 0 + 0 + 8 of 100
   assert.deepEqual([p3.stage, Number(p3.capture_score)], ["shortlisted", 30]);
-  const cardsBy = Object.fromEntries(out.data.cards.map((c) => [c.prospect_id, [c.capture_score, c.estimated_leak]]));
-  assert.deepEqual([cardsBy[cheap.id], cardsBy[unpriced.id], cardsBy[slowish.id]], [[8, { low: 20, high: 450 }], [8, null], [30, { low: 800, high: 18000 }]], "everyone tested gets a card, a low estimate too (owner, 18 Nov 2026)");
+  const cardsBy = Object.fromEntries(out.data.cards.map((c) => [c.prospect_id, [c.capture_score, c.estimated_leak && { low: c.estimated_leak.low, high: c.estimated_leak.high, basis: c.estimated_leak.basis }]]));
+  // the one with no price of its own: the median of 100 and 4,000 is 2,050; 2,050 x 20 x 0.1 x 0.1 = 410, 2,050 x 60 x 0.3 x 0.25 = 9,225
+  assert.deepEqual([cardsBy[cheap.id], cardsBy[unpriced.id], cardsBy[slowish.id]], [[8, { low: 20, high: 450, basis: "own_price" }], [8, { low: 410, high: 9225, basis: "nearby_median" }], [30, { low: 800, high: 18000, basis: "own_price" }]], "everyone tested gets a card, a low estimate too (owner, 18 Nov 2026)");
   assert.equal(out.data.cards.at(-1).prospect_id, slowish.id, "the weakest at capturing comes first");
-  assert.match(out.body, /\*\*Estimated leak: no figure\.\*\* The business does not publish a price for its highest value service, so no estimate can be made\./);
+  assert.ok(out.body.includes("Workings: £2,050: the median published price of 2 nearby private dental and aesthetics clinics in Fixtureton for dental implants (sources: https://fixture-alpha.example.test/prices, https://fixture-gamma.example.test/prices). They publish no price of their own (ASSUMPTION: that they charge about the same) × 20 to 60 enquiries a month (ASSUMPTION)"), out.body);
+  assert.ok(out.body.includes("- Estimated leak: £410 to £9,225 a month (estimate)"));
+  assert.ok(out.body.includes(`<!-- prospect:${unpriced.id} -->`), "each card carries its business's id, for the call list");
+  const drafts = t.requests.filter((r) => r.stage === "draft");
+  assert.ok(drafts.length >= 3);
+  for (const r of drafts) assert.ok(!/£|median|leak|9,225|2,050/i.test(r.user), "the drafting model is never given the estimate, nor the prices it was made from");
   assert.match(out.body, /- A person replied 2026-11-16 15:00 UTC: "Hello\. Please telephone the practice\."/);
   assert.deepEqual(p3.capture_breakdown.parts.map((part) => part.points), [22, 0, 0, 8, null, null]);
   // a higher threshold for the estimate is a setting; so is the capture threshold
@@ -2684,4 +2690,131 @@ test("the first live day's real replies: none is a complaint, none stops sending
   assert.ok(!out.body.includes("legally privileged"), "the firm's footer is not quoted");
   // and the drafting model is told, so the first message can say so
   assert.ok(t.requests.filter((r) => r.stage === "draft").some((r) => r.user.includes('The reply did not answer by email and told the enquirer to telephone. In its words: "You will need to call our offices to obtain a quote."')));
+});
+
+// ---- the estimated leak, from others' published prices when a business publishes none ----
+
+test("the leak: their own price comes first; else the median of nearby rivals' prices for the same service, labelled, with sources; else the kind in every area; else no figure", async () => {
+  const { benchmarkFrom, median, priceServiceOf } = await import("../dist/outreach/enquiry-rules.js");
+  const clinics = forType(S, "clinics");
+  const own = { amount: 3000, source_url: "https://fixture-own.example.test/prices" };
+  const rival = (area, amount, service = "dental implants", key = String(amount)) => ({ area, amount, service, source_url: `https://fixture-${key}.example.test/prices` });
+  const near = benchmarkFrom({ area: "Fixtureton", service: "dental implants" }, [rival("Fixtureton", 2000), rival("Fixtureton", 2600), rival("Fixtureton", 9000), rival("Fixtureton", 50, "teeth whitening"), rival("Elsewhere", 1)], clinics);
+  assert.deepEqual([near.amount, near.count, near.scope, near.area], [2600, 3, "nearby", "Fixtureton"], "the middle of the three nearby for the same service; another service and another place are not counted");
+
+  // their own price is used whenever they publish one
+  const mine = estimateLeak(own, { minutesToReply: null }, clinics, near);
+  assert.deepEqual([mine.low, mine.high, mine.basis], [600, 13500, "own_price"]);
+  assert.match(mine.workings, /^£3,000 \(their published price, source: https:\/\/fixture-own\.example\.test\/prices\)/);
+
+  // none of their own: the nearby median, said as such, with every source, and every assumption still labelled
+  const borrowed = estimateLeak(null, { minutesToReply: null }, clinics, near);
+  assert.deepEqual([borrowed.estimated, borrowed.low, borrowed.high, borrowed.basis], [true, 520, 11700, "nearby_median"]);
+  assert.equal(borrowed.workings,
+    "£2,600: the median published price of 3 nearby private dental and aesthetics clinics in Fixtureton for dental implants (sources: https://fixture-2000.example.test/prices, https://fixture-2600.example.test/prices, https://fixture-9000.example.test/prices). " +
+    "They publish no price of their own (ASSUMPTION: that they charge about the same) × 20 to 60 enquiries a month (ASSUMPTION) × 10% to 30% lost to a slow or missing reply (ASSUMPTION) × 10% to 25% that would have bought (ASSUMPTION) = £520 to £11,700 a month");
+
+  // fewer than two nearby: the same kind and service in every area searched, said as such
+  const wide = benchmarkFrom({ area: "Fixtureton", service: "dental implants" }, [rival("Fixtureton", 2000), rival("Elsewhere", 3000), rival("Further", 5000)], clinics);
+  assert.deepEqual([wide.amount, wide.count, wide.scope, wide.area], [3000, 3, "all_areas", null]);
+  const wideLeak = estimateLeak(null, { minutesToReply: null }, clinics, wide);
+  assert.equal(wideLeak.basis, "kind_median");
+  assert.match(wideLeak.workings, /^£3,000: the median published price of 3 private dental and aesthetics clinics across every area searched for dental implants, as fewer than 2 nearby publish one \(sources: .+\)\. They publish no price of their own \(ASSUMPTION: that they charge about the same\) × 20 to 60 enquiries a month \(ASSUMPTION\)/);
+  assert.equal(median([1, 2, 3, 10]), 2.5);
+
+  // fewer than two anywhere: no figure, and nothing made up
+  const none = benchmarkFrom({ area: "Fixtureton", service: "dental implants" }, [rival("Fixtureton", 2000), rival("Elsewhere", 300, "veneers")], clinics);
+  assert.deepEqual(none, { amount: null, service: "dental implants" });
+  assert.deepEqual(estimateLeak(null, { minutesToReply: null }, clinics, none), { estimated: false, why: "the business does not publish a price for dental implants, and fewer than 2 other businesses of its kind do, so no estimate can be made" });
+  assert.equal(benchmarkFrom({ area: "Fixtureton", service: null }, [rival("Fixtureton", 1), rival("Fixtureton", 2)], clinics).amount, null, "a service that cannot be told is not compared");
+  // the other rules still come first: a fast reply is not a leak, whoever's price it would be
+  assert.equal(estimateLeak(null, { minutesToReply: 30 }, clinics, near).estimated, false);
+  assert.equal(estimateLeak(null, null, clinics, near).estimated, false, "no test, no estimate");
+  // which service a price is for: read off the analysis, by the kind's own list
+  assert.equal(priceServiceOf({ highest_value_service: { value: "Fixture implants from £2,000", source_url: "x" } }, clinics), "dental implants");
+  assert.equal(priceServiceOf({ highest_value_service: "not found" }, clinics), null);
+});
+
+test("the leak's prices come from the master list: same kind, same service, own area first, then every area; a business with too few to go on gets no figure", async () => {
+  const { priceBenchmark } = await import("../dist/outreach/store.js");
+  const t = await house();
+  const target = await clinic(t, "target");
+  const near1 = await clinic(t, "near", { price: 1000 });
+  const far1 = await clinic(t, "farone", { price: 3000 });
+  const far2 = await clinic(t, "fartwo", { price: 5000 });
+  await clinic(t, "other", { price: 99, service: "fixture whitening" });
+  const area = (id, name) => h.admin.query("update prospects set search_area = $2 where prospect_id = $1", [id, name]);
+  await area(far1.id, "Elsewhere");
+  await area(far2.id, "Further");
+  const bench = (id) => h.gatewayDb.tx(t.x.w.tenantId, (tx) => priceBenchmark(tx, id, forType(S, "clinics")));
+  let b = await bench(target.id);
+  assert.deepEqual([b.amount, b.count, b.scope, [...b.sources].sort()], [3000, 3, "all_areas", [near1.site, far1.site, far2.site].map((s) => `${s}prices`).sort()], "one nearby is too few, so every area: 1,000, 3,000 and 5,000");
+  await area(far1.id, "Fixtureton");
+  b = await bench(target.id);
+  assert.deepEqual([b.amount, b.count, b.scope], [2000, 2, "nearby"], "two nearby are enough: the median of 1,000 and 3,000");
+  await h.admin.query("update prospects set analysis = analysis - 'highest_value_price' where prospect_id = any ($1)", [[far1.id, far2.id]]);
+  b = await bench(target.id);
+  assert.deepEqual(b, { amount: null, service: "dental implants" }, "one price left anywhere: no figure");
+});
+
+// ---- what happened on each call ----
+
+test("call outcomes: recorded behind the token, checked, kept as history, listed by room; not interested suppresses for good; nothing personal in events or the house", async () => {
+  const t = await house({ server: true });
+  const { x } = t;
+  const alpha = await clinic(t, "alpha");
+  const beta = await clinic(t, "beta");
+  await h.admin.query("update prospects set card = '{}'::jsonb where prospect_id = $1", [beta.id]);
+  const post = (id, body, token) => x.call("POST", `/v1/prospects/${id}/outcome`, body, token);
+  const NOTE = "Spoke to FIXTURE-PERSON-NAME on reception, ring back after lunch";
+
+  // the token, as for every route
+  assert.equal((await post(alpha.id, { outcome: "no_answer" }, null)).status, 401);
+  assert.equal((await x.call("GET", `/v1/rooms/${ROOM}/calls`, undefined, null)).status, 401);
+  // checks
+  for (const bad of [{}, { outcome: "maybe" }, { outcome: "no_answer", note: 5 }, { outcome: "no_answer", note: "x".repeat(1001) },
+    { outcome: "call_back", followUpOn: "21/11/2026" }, { outcome: "call_back", followUpOn: "2026-02-30" }, { outcome: "no_answer", followUpOn: "2026-11-21" }]) {
+    assert.equal((await post(alpha.id, bad)).status, 422, JSON.stringify(bad).slice(0, 80));
+  }
+  assert.equal((await post("00000000-0000-4000-8000-000000000000", { outcome: "no_answer" })).status, 404);
+  assert.equal((await post("not-a-uuid", { outcome: "no_answer" })).status, 404);
+  assert.equal((await x.call("GET", "/v1/rooms/fixture-floor-one:nowhere/calls")).status, 404);
+  assert.deepEqual(await rows(h, "select 1 from call_outcomes where tenant_id = $1", [x.w.tenantId]), [], "nothing refused was stored");
+
+  // recorded, and every call kept
+  assert.deepEqual((await post(alpha.id, { outcome: "no_answer" })).body, { ok: true });
+  x.w.clock.advance(HOUR);
+  assert.deepEqual((await post(alpha.id, { outcome: "call_back", note: `  ${NOTE}  `, followUpOn: "2026-11-21" })).body, { ok: true });
+  x.w.clock.advance(HOUR);
+  assert.equal((await post(alpha.id, { outcome: "interested", note: "", followUpOn: "" })).status, 200);
+  const listed = (await x.call("GET", `/v1/rooms/${ROOM}/calls`)).body.calls;
+  const a = listed.find((c) => c.prospectId === alpha.id);
+  assert.deepEqual(a.history.map((c) => [c.outcome, c.note, c.followUpOn]), [["interested", null, null], ["call_back", NOTE, "2026-11-21"], ["no_answer", null, null]], "newest first, nothing overwritten");
+  assert.deepEqual(a.latest, a.history[0]);
+  assert.equal(a.name, "Fixture Alpha Dental");
+  assert.deepEqual(listed.find((c) => c.prospectId === beta.id), { prospectId: beta.id, name: "Fixture Beta Dental", latest: null, history: [] }, "a business with a card and no call yet is listed too");
+  assert.equal(listed.length, 2, "a business with neither a card nor a call is not");
+  // nobody can rewrite or remove the history
+  await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("update call_outcomes set outcome = 'no_answer'")), (err) => err.code === "42501");
+  await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("delete from call_outcomes")), (err) => err.code === "42501");
+  await assert.rejects(h.agentDb.tx(x.w.tenantId, (tx) => tx.query("select 1 from call_outcomes")), (err) => err.code === "42501");
+
+  // the house log shows that something was recorded, and nothing of what
+  const events = (await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId, withPayload: true })).filter((e) => e.reasonCode === "call_outcome_recorded");
+  assert.equal(events.length, 3);
+  assert.ok(events.every((e) => e.summary === "A call outcome was recorded" && e.payload === null));
+  const everything = JSON.stringify([await rows(h, "select * from events where tenant_id = $1", [x.w.tenantId]), (await x.call("GET", "/v1/house")).body]);
+  for (const secret of ["FIXTURE-PERSON-NAME", "Fixture Alpha", "interested", "call_back"]) assert.ok(!everything.includes(secret), `"${secret}" reached events or the house`);
+  assert.ok((await x.roomOf(ROOM)).log.some((l) => l.text === "A call outcome was recorded"));
+
+  // not interested: never sent an enquiry again, by its site, its name and postcode and its address
+  assert.equal((await post(beta.id, { outcome: "not_interested" })).status, 200);
+  const kinds = (await rows(h, "select kind, value_key, source from suppressions where tenant_id = $1 order by kind", [x.w.tenantId])).map((r) => [r.kind, r.source]);
+  assert.deepEqual(kinds.map((k) => k[0]).sort(), ["domain", "email", "name_postcode"]);
+  const [betaRow] = await prospectsByIds(h.gatewayDb, t.scope, [beta.id]);
+  assert.deepEqual(await proposeEnquiry(h.gatewayDb, x.runtime.gateway, t.scope, betaRow, GOOD, x.w.clock.now()), { proposed: false, why: "suppressed" });
+  assert.deepEqual((await recordProspect(h.gatewayDb, t.scope, { name: "Fixture Beta Dental", website: beta.site, signal: "none", source_url: beta.site }, { now: x.w.clock.now() })).why, "suppressed", "and never found again");
+  // recording it twice changes nothing more
+  assert.equal((await post(beta.id, { outcome: "not_interested" })).status, 200);
+  assert.equal((await rows(h, "select 1 from suppressions where tenant_id = $1", [x.w.tenantId])).length, 3);
 });

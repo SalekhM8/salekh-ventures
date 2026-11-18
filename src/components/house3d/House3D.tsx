@@ -1040,7 +1040,7 @@ export default function House3D({
               <div data-lenis-prevent className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 md:px-10">
                 {(() => {
                   const leads = viewing.title.startsWith("Shortlist") ? parseShortlist(viewing.body) : [];
-                  return leads.length > 0 ? <CallList leads={leads} report={viewing.body} /> : <Markdown text={viewing.body} />;
+                  return leads.length > 0 ? <CallList leads={leads} report={viewing.body} roomId={isLive ? room.id : undefined} loadCalls={live.calls} saveOutcome={live.recordOutcome} /> : <Markdown text={viewing.body} />;
                 })()}
               </div>
             </motion.article>

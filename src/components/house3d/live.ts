@@ -26,6 +26,11 @@ type ApiHouse = {
   handoffs: { id: string; from: string; to: string; at: string }[];
 };
 
+export type CallOutcome = "no_answer" | "call_back" | "interested" | "meeting_booked" | "not_interested" | "wrong_person";
+export type CallRecord = { outcome: CallOutcome; note: string | null; followUpOn: string | null; at: string };
+export type ProspectCalls = { prospectId: string; name: string; latest: CallRecord | null; history: CallRecord[] };
+export type OutcomeInput = { outcome: CallOutcome; note?: string; followUpOn?: string };
+
 const API_DEPT_TO_UI = Object.fromEntries((Object.keys(DEPT_API) as DeptKey[]).map((k) => [DEPT_API[k], k])) as Record<string, DeptKey>;
 
 function toUi(apiRoomId: string) {
@@ -187,7 +192,18 @@ export function useLiveHouse(enabled = true) {
     [refresh],
   );
 
-  return { connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany };
+  /** Every business in one room with a card or a recorded call, and its calls. Personal data (the notes): kept in memory only. */
+  const calls = useCallback(async (roomId: string): Promise<ProspectCalls[] | null> => {
+    const r = await call(`v1/rooms/${toApi(roomId)}/calls`);
+    return r.ok && Array.isArray(r.json.calls) ? (r.json.calls as ProspectCalls[]) : null;
+  }, []);
+  /** Record what happened on a call. Returns null when saved, or why it was not. */
+  const recordOutcome = useCallback(async (prospectId: string, body: OutcomeInput): Promise<string | null> => {
+    const r = await call(`v1/prospects/${encodeURIComponent(prospectId)}/outcome`, body);
+    return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
+  }, []);
+
+  return { connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome };
 }
 
 export const RUN_REFUSED: Record<string, string> = {

@@ -25,6 +25,7 @@ import { renderResultsSoFar, replyPrompt } from "./outreach/pipeline.js";
 import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
 import { emitEvent, type EventInput } from "./control/events.js";
+import { checkOutcome, listCalls, recordOutcome, type CallsOfProspect } from "./outreach/calls.js";
 import { createGateway, type Gateway } from "./control/gateway.js";
 import { finishRun, startRun, tenantDay } from "./control/runs.js";
 import { pullTraffic } from "./jobs/pull-traffic.js";
@@ -140,6 +141,10 @@ export interface Runtime {
   scoreDue(): Promise<number>;
   /** Replies received in one room since a moment (default: the last seven days). Personal data, on purpose. */
   listReplies(roomId: string, since: string | null): Promise<Answer<{ replies: ReplyRecord[] }>>;
+  /** Record what happened on a call to one business. Append only. "not_interested" also suppresses it for good. */
+  recordCallOutcome(prospectId: string, body: unknown): Promise<Answer<{ ok: true }>>;
+  /** Every business in one room with a card or a recorded call, and its calls. Personal data (the notes), on purpose. */
+  listCalls(roomId: string): Promise<Answer<{ calls: CallsOfProspect[] }>>;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -709,14 +714,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   };
 
   async function redraftCards(since: string): Promise<number> {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) return 0;
+    // "YYYY-MM-DD", or "YYYY-MM-DD.N" to ask again the same day (each value works once).
+    if (!/^\d{4}-\d{2}-\d{2}(\.\d+)?$/.test(since)) return 0;
+    const day = since.slice(0, 10);
     return gatewayDb.tx(tenantId, async (tx) => {
-      const code = `cards_redrafted_${since.replace(/-/g, "_")}`;
+      const code = `cards_redrafted_${since.replace(/[-.]/g, "_")}`;
       if ((await tx.query("select 1 from events where type = 'stage' and reason_code = $1 limit 1", [code])).rows.length > 0) return 0;
       // Back to 'tested' with no card: the next run writes the card again, scoring and rivals by today's rules.
       const r = await tx.query(
         "update prospects set stage = 'tested', card = null where stage = 'shortlisted' and capture_score is not null and shortlisted_at >= $1::date and purged_at is null returning business_id",
-        [since]);
+        [day]);
       const businessId = (r.rows[0]?.business_id as string | undefined) ?? null;
       await emitEvent(tx, { tenantId, businessId, department: "outreach", type: "stage", reasonCode: code, summary: `Profiles written today and since will be written again by today's rules: ${r.rowCount ?? 0}`, payload: { since }, now: clock() });
       return r.rowCount ?? 0;
@@ -795,6 +802,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
     if (!room) return { status: 404 };
     return { status: 200, enquiries: await listEnquiries(gatewayDb, tenantId, room.businessId, from) };
+  };
+
+  const recordCallOutcome: Runtime["recordCallOutcome"] = async (prospectId, body) => {
+    const checked = checkOutcome(body);
+    if (!checked.ok) return { status: 422, reason: checked.reason };
+    const done = await recordOutcome(gatewayDb, tenantId, prospectId, checked, clock());
+    if (!done) return { status: 404 };
+    changed();
+    return { status: 200, ok: true };
+  };
+
+  const listCallsOf: Runtime["listCalls"] = async (roomId) => {
+    const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
+    if (!room) return { status: 404 };
+    return { status: 200, calls: await listCalls(gatewayDb, tenantId, room.businessId) };
   };
 
   const setKillSwitch: Runtime["setKillSwitch"] = async (body) => {
@@ -1060,5 +1082,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

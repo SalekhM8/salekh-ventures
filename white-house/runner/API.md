@@ -88,6 +88,32 @@ What was sent from one room, newest first. `since` is an ISO date and time; with
 
 `withoutApproval` is true for an enquiry that went (or is queued to go) at rung 3, with nobody's yes. **Like the approvals list, this returns personal data on purpose** and must not be cached or logged. When test enquiries are at rung 3 there is nothing to approve: the room is not `waiting`, the approvals list is empty, and each shortlist opens with how many were sent without asking.
 
+## POST /v1/prospects/:prospectId/outcome  (added 18 Nov 2026)
+
+What happened when Salekh telephoned a business from the call list. Body:
+
+```json
+{ "outcome": "no_answer | call_back | interested | meeting_booked | not_interested | wrong_person", "note": "text, optional, at most 1000 characters", "followUpOn": "YYYY-MM-DD, optional" }
+```
+
+`followUpOn` is allowed only with `call_back` or `interested`. Answers `{ "ok": true }`; 404 for a prospect that is not known (or not an id); 422 with a `reason` for anything else wrong. Append only: each call adds a record and none is changed or removed, so the history is kept. `not_interested` also suppresses the business for good, by its website, company number, name and postcode, and every address it was written to or publishes: it is never sent an enquiry again and never found again. Each recording writes one event with the fixed summary "A call outcome was recorded" and no payload. **The note is personal data** (it may name the person spoken to): it is never in an event or in `/v1/house`.
+
+## GET /v1/rooms/:roomId/calls  (added 18 Nov 2026)
+
+Every business in the room that has a shortlist card or any recorded call, newest shortlisted first. 404 for an unknown room.
+
+```json
+{ "calls": [ {
+  "prospectId": "uuid", "name": "business name",
+  "latest": { "outcome": "call_back", "note": "text or null", "followUpOn": "YYYY-MM-DD or null", "at": "ISO time" },
+  "history": [ { "outcome": "...", "note": "...", "followUpOn": "...", "at": "..." } ]
+} ] }
+```
+
+`latest` is null when no call is recorded; `history` is newest first. **Personal data on purpose** (the notes), like the approvals and enquiries lists: do not cache or log it.
+
+Each card in a Shortlist's Markdown carries its business's id on the line after its heading, as `<!-- prospect:<uuid> -->` (an HTML comment, not shown), and opens its profile with `- Estimated leak: £400 to £9,000 a month (estimate)` or `- Estimated leak: no figure (<why>)`. The output's `data.cards[]` has `prospect_id`, `estimated_leak` (`{ low, high, basis: "own_price" | "nearby_median" | "kind_median", workings }` or null) and `no_leak_reason`. Shortlists written before 18 Nov 2026 have neither line.
+
 ## POST /v1/approvals/batch  (added 16 Nov 2026)
 
 Body `{ "decisions": [ { "id": "uuid", "decision": "approve" | "reject", "payloadHash": "as shown" } ] }`, 1 to 200 items. Each item goes through the same code as `POST /v1/approvals/:id`, one at a time, in the order given. Always answers 200 with one result per item, in the same order:

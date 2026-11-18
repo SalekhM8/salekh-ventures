@@ -369,7 +369,7 @@ test("a full run: both routes find, code reads the pages, the list is filtered, 
   assert.deepEqual(out.data.tally, { found: 3, already_known: 1, suppressed: 1, analysed: 3, filtered_out: { no_named_contact: 1, not_limited_company: 1 }, shortlisted: 1, stale_adverts: 0, unconfirmed_adverts: 0, would_pass_with_companies_house: 0,
     enquiries_proposed: { prospect: 0, rival: 0 }, enquiries_dropped: 0, scored_after_test: 0, not_testable: 0, reissued: 0, no_website: 0 });
   assert.ok(requests[4].user.includes("Fixture Glow Aesthetics publishes instagram for enquiries"), "the drafting model is given only the differences that go against the prospect");
-  assert.deepEqual(out.data.cards, [{ prospect_id: smile.prospect_id, score: 65, capture_score: null, reissue: false, estimated_leak: null, competitor_ids: [glow.prospect_id, solo2.prospect_id] }]);
+  assert.deepEqual(out.data.cards, [{ prospect_id: smile.prospect_id, score: 65, capture_score: null, reissue: false, estimated_leak: null, no_leak_reason: "not tested yet", competitor_ids: [glow.prospect_id, solo2.prospect_id] }]);
   assert.deepEqual(out.data.areas_searched, ["Fixtureton"]);
   assert.deepEqual(out.data.costs.find, { model_calls: 1, tokens_in: 1000, tokens_out: 100, cost_usd: 0.2, cost_gbp: 0.1 });
   assert.deepEqual([out.data.costs.analyse.model_calls, out.data.costs.analyse.tokens_in, out.data.costs.draft.model_calls, out.data.costs.total_gbp], [3, 6000, 2, 0.35]);

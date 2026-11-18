@@ -89,6 +89,14 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.listApprovals(b as string);
         return r.status === 200 ? send(res, 200, { approvals: r.approvals }) : fail(r);
       }
+      case "GET rooms/:id/calls": {
+        const r = await rt.listCalls(b as string);
+        return r.status === 200 ? send(res, 200, { calls: r.calls }) : fail(r);
+      }
+      case "POST prospects/:id/outcome": {
+        const r = await rt.recordCallOutcome(b as string, body);
+        return r.status === 200 ? send(res, 200, { ok: true }) : fail(r);
+      }
       case "POST approvals/:id": {
         // "batch" is not an id: several decisions in one request, each through the single path.
         if (b === "batch") {

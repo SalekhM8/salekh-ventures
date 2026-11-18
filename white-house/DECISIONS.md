@@ -909,3 +909,15 @@ Settings are stored written out in full, so the raised Places limit (and the wid
 
 The line about when enquiries go is now written from the settings in force, slot by slot, not from fixed words.
 
+
+## The call list: outcomes of calls, and a leak figure for more businesses, 18 Nov 2026
+
+### C1. What happened on each call
+
+Salekh records the outcome of each call on its card: no answer, call back, interested, meeting booked, not interested, wrong person, with an optional note and, for a call back or interested, an optional date to ring again. Kept in `call_outcomes` (migration 0016), append only, by prospect id, so a card in an older shortlist of the same business shows the same history. The gateway's role writes and reads; the UI's role reads; agent tools have nothing. The note is personal data: it is read back only by `GET /v1/rooms/:roomId/calls`; events carry the fixed line "A call outcome was recorded" with no payload. Not interested suppresses the business for good (source `manual`), by every key it is known by. Call notes are not yet covered by the 90 day purge: a retention rule is still to be decided.
+
+Each card in the Markdown now carries `<!-- prospect:<uuid> -->` on the line after its heading. The site's Markdown reader skips HTML comments. A shortlist written before this has no marker: the call list then ties a card to a business only when exactly one business in the room's calls list has exactly that name; otherwise it shows the buttons switched off with "Record outcomes from tomorrow's list".
+
+### C2. A leak figure when the business publishes no price
+
+Most businesses publish no price, so most cards said "no figure". Now: their own published price if there is one (as before); otherwise the median of the prices that other businesses of the same kind, found by a search for the same place, publish for the same named service (the service is the kind's own name for it, read from each analysis's highest value service), at least two of them; otherwise the same across every area searched; otherwise no figure. The workings say which, list the sources, and label "that they charge about the same" as an ASSUMPTION. Every other assumption keeps its label. No price is ever made up. The drafting model is still given no estimate and no price. Each card's profile opens with a one-line form (`- Estimated leak: £400 to £9,000 a month (estimate)`), and the full workings stay where they were.

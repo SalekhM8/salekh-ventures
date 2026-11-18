@@ -5,7 +5,7 @@ import { ControlError } from "../control/errors.js";
 import { tenantDay } from "../control/runs.js";
 import { companyNumberKey, domainKey, hostKey, nameKey, namePostcodeHash, namesNearlyMatch, postcodeKey } from "./normalise.js";
 import type { Place } from "../control/connectors/places.js";
-import { captureFor, sayMinutes, serviceFor, SLOT_NAME, type Slot, type TestResult } from "./enquiry-rules.js";
+import { benchmarkFrom, captureFor, priceServiceOf, sayMinutes, serviceFor, SLOT_NAME, type PriceBenchmark, type Slot, type TestResult } from "./enquiry-rules.js";
 import { applyFilters, isGroup, scoreProspect, type Analysis, type Draft, type Scorable } from "./score.js";
 import { FIRST_TYPE_ID, forType } from "./settings.js";
 import { SIGNALS, type OutreachSettings } from "./settings.js";
@@ -890,6 +890,35 @@ export async function knownDomains(db: Db, scope: ProspectScope, domains: string
     );
     return { known: new Set(known.rows.map((r) => r.domain_key as string)), suppressed: new Set(suppressed.rows.map((r) => r.value_key as string)) };
   });
+}
+
+// ---- prices published by others of the same kind -----------------------------
+
+/**
+ * For a business that publishes no price: what other businesses of its kind on this floor publish for the same
+ * named service, read from their own analyses (each price is a figure on their own pages, with its source). Those
+ * found by a search for the same place come first; see benchmarkFrom. `settings` is already for its kind.
+ */
+export async function priceBenchmark(tx: Tx, prospectId: string, settings: OutreachSettings): Promise<PriceBenchmark> {
+  const self = (await tx.query("select business_id, search_area, business_type, analysis from prospects where prospect_id = $1", [prospectId])).rows[0];
+  if (!self) return { amount: null, service: null };
+  const others = (await tx.query(
+    `select search_area, analysis from prospects
+      where business_id = $1 and business_type = $2 and prospect_id <> $3 and purged_at is null
+        and jsonb_typeof(analysis -> 'highest_value_price') = 'object'
+        and coalesce(filter_reason, '') not in ('not_a_match', 'duplicate')`,
+    [self.business_id, self.business_type, prospectId])).rows;
+  const service = priceServiceOf(self.analysis, settings) ?? serviceFor(self.analysis, settings);
+  return benchmarkFrom(
+    { area: self.search_area ?? null, service },
+    others.flatMap((o) => {
+      const price = o.analysis?.highest_value_price as { amount?: unknown; source_url?: unknown } | undefined;
+      const amount = Number(price?.amount);
+      if (!(amount > 0) || typeof price?.source_url !== "string") return [];
+      return [{ area: (o.search_area as string | null) ?? null, amount, source_url: price.source_url, service: priceServiceOf(o.analysis, settings) }];
+    }),
+    settings,
+  );
 }
 
 // ---- suppressions ----------------------------------------------------------

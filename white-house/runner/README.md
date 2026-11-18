@@ -220,6 +220,7 @@ Plain SQL in `white-house/db/migrations/`, applied in name order, each once. A f
 | `src/jobs/pull-traffic.ts` | Plain code: totals into `metrics` |
 | `src/outreach/pipeline.ts` | The prospecting pipeline, stage by stage |
 | `src/outreach/stages.ts` | The three single model calls and the code that checks their answers |
+| `src/outreach/calls.ts` | What happened on each call from the call list (append only); not interested suppresses |
 | `src/outreach/store.ts` | The master list: dedupe, suppression, analysis, score, competitors, purge, numbers |
 | `src/outreach/score.ts`, `settings.ts`, `normalise.ts`, `extract.ts` | Filters and score, settings, dedupe keys, what code reads off a page |
 | `src/control/connectors/agent-reach.ts`, `companies-house.ts` | Search and page reading; the Companies House register |

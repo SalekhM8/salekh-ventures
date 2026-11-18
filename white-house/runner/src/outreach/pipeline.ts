@@ -26,6 +26,7 @@ import { addInto, addTo, analyseBusiness, classifyLeads, draftCard, draftEnquiry
 import {
   addSignals, compare, knownDomains, linkCompetitors, listForAnalysis, markAnalysisFailed, matchHiddenAdvert, nextPairs, recordAnalysis, recordProspect, awaitingCompanyCheck, saveCompanyCheck, type SearchPair,
   countWaiting, knownSiteByName, linkNearest, placeOf, prospectsByIds, PROSPECT_COLUMNS, rejectProspect, saveCard, scoreAndFilter, toProspectRow, triageAnalysed, type Comparison, type ProspectRow, type ProspectScope, type PublicFacts,
+  priceBenchmark,
 } from "./store.js";
 
 /**
@@ -960,7 +961,9 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     places: ctx.places ? { ...placesUse, limit: settings.max_places_calls_per_run, price_tier: PLACES_PRICE_TIERS.search } : null,
     cards: cards.map((c) => ({
       prospect_id: c.prospectId, score: c.score, capture_score: c.test?.capture.score ?? null, reissue: c.reissue,
-      estimated_leak: c.test?.leak.estimated ? { low: c.test.leak.low, high: c.test.leak.high } : null,
+      // An ESTIMATE, with its workings and where its price came from. Never given to the drafting model.
+      estimated_leak: c.test?.leak.estimated ? { low: c.test.leak.low, high: c.test.leak.high, basis: c.test.leak.basis, workings: c.test.leak.workings } : null,
+      no_leak_reason: c.test ? (c.test.leak.estimated ? null : c.test.leak.why) : "not tested yet",
       competitor_ids: c.competitors.map((x) => x.prospect_id),
     })),
     costs: { ...money, total_gbp: totalGbp, per_business_looked_at_gbp: per(tally.analysed), per_business_shortlisted_gbp: per(tally.shortlisted) },
@@ -1089,7 +1092,7 @@ async function retested(db: Db, scope: ProspectScope, p: ProspectRow, settings: 
       leak: estimateLeak(price, {
         minutesToReply: people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null,
         ...(sentOutOfHours(test) ? { outOfHours: { useful: usefulOutOfHours(test, row.timezone).band !== null } } : {}),
-      }, forType(settings, p.typeId)),
+      }, forType(settings, p.typeId), price ? undefined : await priceBenchmark(tx, p.prospectId, forType(settings, p.typeId))),
       enquiry: { subject: row.subject, body: row.body, to: row.to_address },
     };
   });
@@ -1232,8 +1235,11 @@ export function renderShortlist(
     const when = (iso: string) => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 
     lines.push(
-      `## ${i + 1}. ${p.name}${p.reissue ? " (issued again: rivals' results are in)" : ""}`, "",
+      `## ${i + 1}. ${p.name}${p.reissue ? " (issued again: rivals' results are in)" : ""}`,
+      // Invisible when the Markdown is shown: lets the call list tie this card to its business, across shortlists.
+      `<!-- prospect:${p.prospectId} -->`, "",
       "**Profile**", "",
+      `- Estimated leak: ${t?.leak.estimated ? `£${t.leak.low.toLocaleString("en-GB")} to £${t.leak.high.toLocaleString("en-GB")} a month (estimate)` : `no figure (${t && !t.leak.estimated ? t.leak.why : "not tested yet"})`}`,
       `- Kind of business: ${kind.name}`,
       `- Where: ${p.area ?? "not found"}${p.postcode ? `, ${p.postcode}` : ""}`,
       `- Website: ${p.website ?? "not found"}`,

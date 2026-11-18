@@ -241,37 +241,115 @@ export function captureScore(input: CaptureInput, settings: OutreachSettings): C
 // ---- the estimated monthly leak --------------------------------------------
 
 export type Leak =
-  | { estimated: true; low: number; high: number; workings: string }
+  | { estimated: true; low: number; high: number; workings: string; /** Where the price came from. */ basis: "own_price" | "nearby_median" | "kind_median" }
   | { estimated: false; why: string };
 
 const pounds = (n: number): string => `£${Math.round(n).toLocaleString("en-GB")}`;
 const percent = (n: number): string => `${Math.round(n * 100)}%`;
 
 /**
+ * A price for the service, from what OTHER businesses of the same kind have published, when the business publishes
+ * none of its own. Each price is a real published figure with its source; only the middle of them is taken.
+ * `amount: null`: there were not enough to take one.
+ */
+export type PriceBenchmark =
+  | { amount: number; count: number; scope: "nearby" | "all_areas"; service: string; kind: string; area: string | null; sources: string[] }
+  | { amount: null; service: string | null };
+
+/** The fewest published prices a median is taken from. */
+export const MIN_PRICES_FOR_MEDIAN = 2;
+
+/** The median of some prices: the middle one, or the mean of the middle two. */
+export function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? (sorted[mid] as number) : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
+}
+
+/**
+ * Which named service a business's published price is for: its highest value service, matched against the kind's
+ * list of services (and its default one). null when it cannot be told, and then the price is not compared.
+ */
+export function priceServiceOf(analysis: Record<string, unknown> | null | undefined, settings: OutreachSettings): string | null {
+  const field = analysis?.highest_value_service as { value?: unknown } | string | undefined;
+  const text = typeof field === "object" && field !== null && typeof field.value === "string" ? field.value.toLowerCase() : "";
+  if (!text) return null;
+  return namedServices(settings).find((service) => service.terms.some((term) => text.includes(term)))?.name ?? null;
+}
+
+/**
+ * The benchmark for one business from the prices others of its kind published for the same service: those in its
+ * own search area first, and when fewer than two of them publish one, those of the kind in every area searched.
+ */
+export function benchmarkFrom(
+  self: { area: string | null; service: string | null }, others: { area: string | null; amount: number; source_url: string; service: string | null }[], settings: OutreachSettings,
+): PriceBenchmark {
+  if (!self.service) return { amount: null, service: null };
+  const same = others.filter((o) => o.service === self.service && o.amount > 0);
+  const nearby = self.area === null ? [] : same.filter((o) => o.area === self.area);
+  const [found, scope] = nearby.length >= MIN_PRICES_FOR_MEDIAN ? [nearby, "nearby" as const] : [same, "all_areas" as const];
+  // Cheapest first, so the sources are listed in the same order every time.
+  const list = [...found].sort((a, b) => a.amount - b.amount || a.source_url.localeCompare(b.source_url));
+  if (list.length < MIN_PRICES_FOR_MEDIAN) return { amount: null, service: self.service };
+  return { amount: median(list.map((o) => o.amount)), count: list.length, scope, service: self.service, kind: settings.type.name, area: scope === "nearby" ? self.area : null, sources: list.map((o) => o.source_url) };
+}
+
+const listSources = (sources: string[]): string => {
+  const shown = sources.slice(0, 5).join(", ");
+  return sources.length > 5 ? `${shown} and ${sources.length - 5} more` : shown;
+};
+
+/**
  * An ESTIMATE of what a slow or missing reply costs a business each month, as a range, with the sum shown.
- * The price is the business's own published figure and the reply is what the test measured. The other three
- * numbers are assumptions from settings and are labelled as such wherever this appears. It is for Salekh's
- * eyes on the card. It is never to be stated to the business as a fact about them.
+ * The price is the business's own published figure when it publishes one; when it does not, it is the median of
+ * the prices other businesses of its kind publish for the same service (nearby first), which is said as such and
+ * labelled as an assumption about this business. The reply is what the test measured. The other numbers are
+ * assumptions from settings and are labelled as such wherever this appears. It is for Salekh's eyes on the card.
+ * It is never to be stated to the business as a fact about them, and it is never given to the drafting model.
+ * `benchmark` undefined: no other business's prices were looked at.
  */
 export function estimateLeak(
   price: { amount: number; source_url: string } | null,
   enquiry: { minutesToReply: number | null; /** Sent while they were shut. `useful`: something useful came back before or as they opened. */ outOfHours?: { useful: boolean } } | null,
   settings: OutreachSettings,
+  benchmark?: PriceBenchmark,
 ): Leak {
   if (!enquiry) return { estimated: false, why: "no enquiry has been tested, so there is nothing to base an estimate on" };
-  if (!price || !(price.amount > 0)) return { estimated: false, why: "the business does not publish a price for its highest value service, so no estimate can be made" };
+  const own = price && price.amount > 0 ? price : null;
+  const borrowed = !own && benchmark && benchmark.amount !== null ? benchmark : null;
+  if (!own && !borrowed) {
+    if (!benchmark) return { estimated: false, why: "the business does not publish a price for its highest value service, so no estimate can be made" };
+    return {
+      estimated: false,
+      why: benchmark.service
+        ? `the business does not publish a price for ${benchmark.service}, and fewer than ${MIN_PRICES_FOR_MEDIAN} other businesses of its kind do, so no estimate can be made`
+        : "the business does not publish a price for its highest value service, and which service to compare it on cannot be told, so no estimate can be made",
+    };
+  }
+  const amount = own ? own.amount : (borrowed as { amount: number }).amount;
   const a = settings.leak_assumptions;
   const ooh = enquiry.outOfHours;
   if (ooh?.useful) return { estimated: false, why: "something useful came back while they were shut or as they opened, so no leak is estimated from this test" };
   if (!ooh && enquiry.minutesToReply !== null && enquiry.minutesToReply <= 240) return { estimated: false, why: "a person replied within four hours, so no leak is estimated from reply speed" };
   // A test sent out of hours speaks only for the enquiries that arrive out of hours: one more assumption, said as one.
   const share = ooh ? a.share_arriving_out_of_hours : { low: 1, high: 1 };
-  const low = price.amount * a.enquiries_a_month.low * share.low * a.share_lost_to_a_slow_reply.low * a.share_that_would_have_bought.low;
-  const high = price.amount * a.enquiries_a_month.high * share.high * a.share_lost_to_a_slow_reply.high * a.share_that_would_have_bought.high;
+  const low = amount * a.enquiries_a_month.low * share.low * a.share_lost_to_a_slow_reply.low * a.share_that_would_have_bought.low;
+  const high = amount * a.enquiries_a_month.high * share.high * a.share_lost_to_a_slow_reply.high * a.share_that_would_have_bought.high;
+  const priceSaid = own
+    ? `${pounds(own.amount)} (their published price, source: ${own.source_url})`
+    : (() => {
+        const b = borrowed as Extract<PriceBenchmark, { amount: number }>;
+        const whose = b.scope === "nearby"
+          ? `${b.count} nearby ${b.kind}${b.area ? ` in ${b.area}` : ""}`
+          : `${b.count} ${b.kind} across every area searched`;
+        return `${pounds(b.amount)}: the median published price of ${whose} for ${b.service}${b.scope === "nearby" ? "" : `, as fewer than ${MIN_PRICES_FOR_MEDIAN} nearby publish one`} (sources: ${listSources(b.sources)}). ` +
+          "They publish no price of their own (ASSUMPTION: that they charge about the same)";
+      })();
   return {
     estimated: true, low: Math.round(low), high: Math.round(high),
+    basis: own ? "own_price" : (borrowed as Extract<PriceBenchmark, { amount: number }>).scope === "nearby" ? "nearby_median" : "kind_median",
     workings:
-      `${pounds(price.amount)} (their published price, source: ${price.source_url}) × ${a.enquiries_a_month.low} to ${a.enquiries_a_month.high} enquiries a month (ASSUMPTION) ` +
+      `${priceSaid} × ${a.enquiries_a_month.low} to ${a.enquiries_a_month.high} enquiries a month (ASSUMPTION) ` +
       (ooh ? `× ${percent(share.low)} to ${percent(share.high)} arriving out of hours (ASSUMPTION; this test was sent out of hours) ` : "") +
       `× ${percent(a.share_lost_to_a_slow_reply.low)} to ${percent(a.share_lost_to_a_slow_reply.high)} lost to a slow or missing reply (ASSUMPTION) ` +
       `× ${percent(a.share_that_would_have_bought.low)} to ${percent(a.share_that_would_have_bought.high)} that would have bought (ASSUMPTION) = ${pounds(low)} to ${pounds(high)} a month`,

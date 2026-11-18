@@ -14,7 +14,7 @@ import { companyNumberKey, domainKey } from "./normalise.js";
 import { applyFilters, isGroup, scoreProspect, type Scorable } from "./score.js";
 import { forType, type OutreachSettings } from "./settings.js";
 import { addTo, noTotals, readReply, type StageTotals } from "./stages.js";
-import type { ProspectRow, ProspectScope } from "./store.js";
+import { priceBenchmark, type ProspectRow, type ProspectScope } from "./store.js";
 
 /**
  * The test enquiry (mystery shop) in the database and on the wire.
@@ -508,7 +508,9 @@ export async function scoreTested(
       const minutesToReply = people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null;
       const price = typeof p.analysis?.highest_value_price === "object" && p.analysis.highest_value_price !== null ? (p.analysis.highest_value_price as { amount: number; source_url: string }) : null;
       const shut = sentOutOfHours(test);
-      const leak = estimateLeak(price, { minutesToReply, ...(shut ? { outOfHours: { useful: usefulOutOfHours(test, timezone).band !== null } } : {}) }, own);
+      // No price of its own: the median of what others of its kind publish for the same service, said as such.
+      const benchmark = price ? undefined : await priceBenchmark(tx, p.prospectId, own);
+      const leak = estimateLeak(price, { minutesToReply, ...(shut ? { outOfHours: { useful: usefulOutOfHours(test, timezone).band !== null } } : {}) }, own, benchmark);
       const verdict = test.opted_out ? { keep: false as const, reason: "opted_out" }
         // The enquiry never reached them, so their silence says nothing about how they answer.
         : test.replies.some((r) => r.kind === "bounce") ? { keep: false as const, reason: "enquiry_bounced" }

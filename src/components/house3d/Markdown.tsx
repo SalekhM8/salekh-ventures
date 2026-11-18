@@ -24,7 +24,8 @@ export function Markdown({ text }: { text: string }) {
   let key = 0;
   while (i < lines.length) {
     const line = lines[i] ?? "";
-    if (!line.trim()) {
+    // Blank lines, and HTML comments the runner leaves for code to read (the card's business id): never shown.
+    if (!line.trim() || /^\s*<!--.*-->\s*$/.test(line)) {
       i += 1;
       continue;
     }
@@ -104,7 +105,7 @@ export function Markdown({ text }: { text: string }) {
       continue;
     }
     const para: string[] = [];
-    while (i < lines.length && (lines[i] ?? "").trim() && !/^(#{1,4}\s|\s*([-*]|\d+\.)\s|\|)/.test(lines[i] ?? "")) {
+    while (i < lines.length && (lines[i] ?? "").trim() && !/^(#{1,4}\s|\s*([-*]|\d+\.)\s|\||\s*<!--.*-->\s*$)/.test(lines[i] ?? "")) {
       para.push((lines[i] ?? "").trim());
       i += 1;
     }

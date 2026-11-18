@@ -14,7 +14,8 @@ const ALLOWED = [
   /^v1\/outputs\/[\w-]+\/score$/,
   /^v1\/approvals\/[\w-]+$/,
   /^v1\/kill-switch$/,
-  /^v1\/rooms\/[\w-]+:[\w-]+\/(run|acknowledge|approvals)$/,
+  /^v1\/rooms\/[\w-]+:[\w-]+\/(run|acknowledge|approvals|calls)$/,
+  /^v1\/prospects\/[\w-]+\/outcome$/,
   /^v1\/ask$/,
 ];
 
