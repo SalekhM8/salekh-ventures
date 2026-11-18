@@ -254,8 +254,10 @@ test("a gateway with an action type whose connector is missing refuses to be bui
   );
 });
 
-test("the production action list holds the dummy action and the test enquiry, and nothing else", () => {
-  assert.deepEqual(control.actionTypes.names().sort(), ["dummy.action", "enquiry.send_email"]);
+test("the production action list holds the dummy action, the test enquiry and the follow-up email, and nothing else", () => {
+  assert.deepEqual(control.actionTypes.names().sort(), ["dummy.action", "enquiry.send_email", "followup.send_email"]);
+  const f = control.actionTypes.get("followup.send_email");
+  assert.deepEqual([f.maxRung, f.cap.key, f.cap.window, f.undoable, f.connector, f.privatePayload], [3, "followups_per_day", "day", false, "owner-mail", true]);
   const e = control.actionTypes.get("enquiry.send_email");
   assert.deepEqual([e.maxRung, e.cap.key, e.cap.window, e.undoable, e.connector, e.privatePayload], [3, "enquiries_per_day", "day", false, "mail", true]);
   const t = control.actionTypes.get("dummy.action");

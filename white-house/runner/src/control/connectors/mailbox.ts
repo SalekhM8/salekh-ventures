@@ -259,3 +259,25 @@ export function mailboxFromEnv(env: Record<string, string | undefined>): Mailbox
   if (transport !== "smtp_imap") throw new Error("MAIL_TRANSPORT must be smtp_imap or gmail_api");
   return env.TEST_MAILBOX_APP_PASSWORD ? createGmailMailbox({ address, appPassword: env.TEST_MAILBOX_APP_PASSWORD }) : null;
 }
+
+/**
+ * The OWNER's mailbox (for example hello@salekhventures.com), for follow-up emails after a call. Never the test
+ * mailbox: a follow-up is from Salekh, by name, to someone he has spoken to. Over the Gmail API only:
+ *   OWNER_MAIL_ADDRESS                  the address it sends from
+ *   OWNER_GMAIL_OAUTH_REFRESH_TOKEN     its own refresh token (npm run gmail-authorise -- --owner)
+ *   OWNER_GMAIL_OAUTH_CLIENT_ID, _SECRET  optional: the OAuth client, when not the same as GMAIL_OAUTH_CLIENT_ID / _SECRET
+ * null: not configured (or the same address as the test mailbox, which is refused). Follow-ups are then drafted and
+ * approved but never sent: the card offers a copy to send by hand.
+ */
+export function ownerMailboxFromEnv(env: Record<string, string | undefined>): { mailbox: Mailbox | null; why: string | null } {
+  const address = env.OWNER_MAIL_ADDRESS?.trim();
+  if (!address) return { mailbox: null, why: "OWNER_MAIL_ADDRESS is not set" };
+  if (env.TEST_MAILBOX_ADDRESS && env.TEST_MAILBOX_ADDRESS.trim().toLowerCase() === address.toLowerCase()) {
+    return { mailbox: null, why: "OWNER_MAIL_ADDRESS is the test mailbox: follow-ups are never sent from the test mailbox" };
+  }
+  const clientId = env.OWNER_GMAIL_OAUTH_CLIENT_ID || env.GMAIL_OAUTH_CLIENT_ID;
+  const clientSecret = env.OWNER_GMAIL_OAUTH_CLIENT_SECRET || env.GMAIL_OAUTH_CLIENT_SECRET;
+  const refreshToken = env.OWNER_GMAIL_OAUTH_REFRESH_TOKEN;
+  if (!clientId || !clientSecret || !refreshToken) return { mailbox: null, why: "the owner mailbox's OAuth client or OWNER_GMAIL_OAUTH_REFRESH_TOKEN is not set" };
+  return { mailbox: createGmailApiMailbox({ address, clientId, clientSecret, refreshToken }), why: null };
+}

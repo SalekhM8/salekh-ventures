@@ -921,3 +921,35 @@ Each card in the Markdown now carries `<!-- prospect:<uuid> -->` on the line aft
 ### C2. A leak figure when the business publishes no price
 
 Most businesses publish no price, so most cards said "no figure". Now: their own published price if there is one (as before); otherwise the median of the prices that other businesses of the same kind, found by a search for the same place, publish for the same named service (the service is the kind's own name for it, read from each analysis's highest value service), at least two of them; otherwise the same across every area searched; otherwise no figure. The workings say which, list the sources, and label "that they charge about the same" as an ASSUMPTION. Every other assumption keeps its label. No price is ever made up. The drafting model is still given no estimate and no price. Each card's profile opens with a one-line form (`- Estimated leak: £400 to £9,000 a month (estimate)`), and the full workings stay where they were.
+
+## Follow-up emails after a call, 18 Nov 2026
+
+### F1. What starts one, and what it may say
+
+Recording Interested, Call back or Meeting booked WITH a note drafts one follow-up email (one `claude-sonnet-5-5` call, structured output, `agents/outreach-followup.md`), in the background. `POST /v1/prospects/:id/followup` asks again. The model is given the business's name, kind, what it sells, the person named on its site, the recipient's name if given, the outcome, the note, the stored test result as one fixed sentence, and at most one rival's reply time as stored (the fastest rival of the same kind, tested in the same slot, faster than this business). It is never given a price, the leak estimate or any address; any money figure or percentage in the note or in what they sell is taken out before it is sent to the model. A draft that breaks the rules is sent back once with what was wrong, then dropped.
+
+### F2. The recipient is Salekh's, never the system's
+
+`followUpTo` with the outcome, or `to` on an edit. Never taken from the business's pages, the enquiry, or the model (its answer has no field for one). No recipient: no proposal, and the database refuses `waiting`, `approved`, `sending` or `sent` without an address.
+
+### F3. The checks
+
+On every draft and every edit (the gate): under 180 words, signed "Salekh Mahmood, Salekh Ventures", no £ $ € % or "per cent", no link, web address or email address, a recipient that is an address. On the model's draft as well: no promise or guarantee, no claim that it is already connected to their systems ("once we connect to your case system" is fine), the ask for a 20-minute call this week, no number not in the facts, the stored test result stated. Salekh's own edits are held only to the gate.
+
+### F4. Sending
+
+`followup.send_email`, ceiling rung 3, seeded at rung 2, cap `followups_per_day` seeded 20, connector `owner-mail` (the owner's mailbox over the Gmail API, `OWNER_MAIL_*`, a separate refresh token; the test mailbox's address is refused). The connector claims the row and checks again, in the moment before sending, suppression, a later "not interested" and one per business per 24 hours; it reads the message back from Sent. Events carry fixed lines and no payload; the house shows a count only.
+
+At rung 2 a follow-up with a recipient waits for a yes as soon as it is drafted. An edit that changes what would be sent voids that yes (or the wait for one) and puts it to wait again on the new text. "Send" on a card records the yes against the hash shown and sends at once; there is no queue or gap, unlike test enquiries. At rung 3 a follow-up with a recipient is sent as soon as it is drafted; an edit never sends by itself (Send does). Raising the rung does not approve follow-ups already waiting.
+
+### F5. With no owner mailbox
+
+Drafted, approved and shown as usual; nothing is executed, and the card says to copy it and send it yourself. Copying it records the yes (so it does not sit in the house as waiting) and notes that it was copied. This is how it runs until `OWNER_MAIL_*` is set.
+
+### Could not do, or worth knowing
+
+- Not tested against Google: the owner transport is the test mailbox's Gmail API transport, tested against a stub.
+- Replies to a follow-up are not read: the owner's mailbox is only ever sent from and searched for the one Message-ID it sent. Salekh reads his own replies.
+- Follow-ups, like call notes, are not yet covered by the 90 day purge.
+- A yes to a follow-up that the gateway then held back (kill switch, cap) is tried again only when Salekh presses Send again, within the 24 hours an approval lasts.
+

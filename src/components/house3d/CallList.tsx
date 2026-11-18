@@ -7,12 +7,17 @@
 
    Each card records what happened on the call. Calls are kept by the
    business's id, so the same business shows the same history on every
-   shortlist it appears in. */
+   shortlist it appears in.
+
+   After Interested, Call back or Meeting booked with a note, the runner
+   writes a follow-up email. It shows on the card to check, change, send,
+   copy or drop. Nothing is sent without Salekh pressing Send, unless he
+   has switched follow-ups to "send without asking". */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { C, SANS, SERIF } from "./model";
 import { Markdown } from "./Markdown";
-import type { CallOutcome, CallRecord, OutcomeInput, ProspectCalls } from "./live";
+import type { CallOutcome, CallRecord, Followup, FollowupAnswer, FollowupEdit, FollowupList, OutcomeInput, ProspectCalls } from "./live";
 
 export type Lead = {
   rank: number;
@@ -137,6 +142,9 @@ const OUTCOMES: { id: CallOutcome; label: string }[] = [
 ];
 const LABEL = Object.fromEntries(OUTCOMES.map((o) => [o.id, o.label])) as Record<CallOutcome, string>;
 const WITH_DATE: CallOutcome[] = ["call_back", "interested"];
+/** After these, with a note, a follow-up email is written. */
+const FOLLOW_UP: CallOutcome[] = ["interested", "call_back", "meeting_booked"];
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Filter = "to_call" | "follow_ups" | "done" | "all";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -177,10 +185,63 @@ export type CallsApi = {
   save: (prospectId: string, body: OutcomeInput) => Promise<string | null>;
 };
 
+/** Follow-up emails through the runner. Each function must keep its identity between renders (useCallback). */
+export type FollowupApi = {
+  load: (roomId: string) => Promise<FollowupList | null>;
+  edit: (id: string, body: FollowupEdit) => Promise<FollowupAnswer>;
+  decide: (id: string, decision: "send" | "dont_send", payloadHash: string | null) => Promise<FollowupAnswer>;
+  request: (prospectId: string) => Promise<FollowupAnswer>;
+  setRung: (roomId: string, rung: 2 | 3) => Promise<FollowupAnswer>;
+};
+
 const tone = (s: number | null) => (s === null ? "#8a7a72" : s < 40 ? "#B3261E" : s < 70 ? "#B26A00" : "#1c7046");
 
-export function CallList({ leads, report, roomId, loadCalls, saveOutcome }: { leads: Lead[]; report: string; roomId?: string; loadCalls?: CallsApi["load"]; saveOutcome?: CallsApi["save"] }) {
+export function CallList({
+  leads,
+  report,
+  roomId,
+  loadCalls,
+  saveOutcome,
+  followupApi,
+}: {
+  leads: Lead[];
+  report: string;
+  roomId?: string;
+  loadCalls?: CallsApi["load"];
+  saveOutcome?: CallsApi["save"];
+  followupApi?: FollowupApi;
+}) {
   const calls = roomId && loadCalls && saveOutcome ? true : false;
+  const loadFollowups = followupApi?.load;
+  const [fu, setFu] = useState<FollowupList | null>(null);
+  const reloadFollowups = useCallback(async () => {
+    if (!roomId || !loadFollowups) return;
+    const got = await loadFollowups(roomId);
+    if (got) setFu(got);
+  }, [roomId, loadFollowups]);
+  useEffect(() => {
+    if (!roomId || !loadFollowups) return;
+    let live = true;
+    void loadFollowups(roomId).then((got) => {
+      if (live && got) setFu(got);
+    });
+    return () => {
+      live = false;
+    };
+  }, [roomId, loadFollowups]);
+  // While a follow-up is being written, look again every few seconds.
+  const writing = (fu?.drafting.length ?? 0) > 0;
+  useEffect(() => {
+    if (!writing) return;
+    const timer = setInterval(() => void reloadFollowups(), 4000);
+    return () => clearInterval(timer);
+  }, [writing, reloadFollowups]);
+  /** The newest follow-up for each business. */
+  const followupOf = useMemo(() => {
+    const by = new Map<string, Followup>();
+    for (const f of fu?.followups ?? []) if (!by.has(f.prospectId)) by.set(f.prospectId, f);
+    return by;
+  }, [fu]);
   const [open, setOpen] = useState<number | null>(null);
   const [full, setFull] = useState(false);
   const [filter, setFilter] = useState<Filter>("to_call");
@@ -265,6 +326,8 @@ export function CallList({ leads, report, roomId, loadCalls, saveOutcome }: { le
           </button>
         ))}
       </div>
+      {roomId && followupApi && fu && <FollowupSwitch roomId={roomId} list={fu} setRung={followupApi.setRung} onChanged={reloadFollowups} />}
+
       {calls && loadFailed && (
         <p className="mt-2" style={{ font: `400 13px/1.45 ${SANS}`, color: "#B3261E" }}>
           Could not load what was recorded on earlier calls.{" "}
@@ -331,9 +394,25 @@ export function CallList({ leads, report, roomId, loadCalls, saveOutcome }: { le
                     prospectId={id}
                     record={record}
                     save={calls ? saveOutcome : undefined}
-                    onSaved={load}
+                    onSaved={async () => {
+                      await load();
+                      await reloadFollowups();
+                    }}
+                    followups={Boolean(followupApi)}
                     why={!calls ? "Not connected to the runner, so outcomes cannot be saved here." : "Record outcomes from tomorrow's list."}
                   />
+
+                  {id && followupApi && fu && (fu.drafting.includes(id) || followupOf.has(id)) && (
+                    <FollowupCard
+                      followup={followupOf.get(id) ?? null}
+                      writing={fu.drafting.includes(id)}
+                      mailbox={fu.ownerMailbox}
+                      rung={fu.rung}
+                      api={followupApi}
+                      prospectId={id}
+                      onChanged={reloadFollowups}
+                    />
+                  )}
 
                   <button type="button" onClick={() => setOpen(open === l.rank ? null : l.rank)} className="mt-3" style={pill}>
                     {open === l.rank ? "Hide full profile" : "Full profile"}
@@ -405,16 +484,21 @@ function Outcome({
   save,
   onSaved,
   why,
+  followups,
 }: {
   prospectId: string | null;
   record: ProspectCalls | undefined;
   save?: CallsApi["save"];
   onSaved: () => Promise<void>;
   why: string;
+  /** Whether follow-up emails can be asked for here. */
+  followups: boolean;
 }) {
   const [picked, setPicked] = useState<CallOutcome | null>(null);
   const [note, setNote] = useState("");
   const [date, setDate] = useState("");
+  const [toName, setToName] = useState("");
+  const [toEmail, setToEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [history, setHistory] = useState(false);
@@ -424,9 +508,19 @@ function Outcome({
 
   const submit = async () => {
     if (!prospectId || !save || !picked) return;
+    const withEmail = followups && FOLLOW_UP.includes(picked) && toEmail.trim();
+    if (withEmail && !EMAIL.test(toEmail.trim())) {
+      setError("That email address does not look right.");
+      return;
+    }
     setBusy(true);
     setError("");
-    const body: OutcomeInput = { outcome: picked, ...(note.trim() ? { note: note.trim() } : {}), ...(date && WITH_DATE.includes(picked) ? { followUpOn: date } : {}) };
+    const body: OutcomeInput = {
+      outcome: picked,
+      ...(note.trim() ? { note: note.trim() } : {}),
+      ...(date && WITH_DATE.includes(picked) ? { followUpOn: date } : {}),
+      ...(withEmail ? { followUpTo: { email: toEmail.trim(), ...(toName.trim() ? { name: toName.trim() } : {}) } } : {}),
+    };
     const failed = await save(prospectId, body);
     setBusy(false);
     if (failed) {
@@ -436,6 +530,8 @@ function Outcome({
     setPicked(null);
     setNote("");
     setDate("");
+    setToName("");
+    setToEmail("");
     await onSaved();
   };
 
@@ -514,6 +610,28 @@ function Outcome({
               style={{ ...field, display: "block", marginTop: 4, resize: "vertical" }}
             />
           </label>
+          {followups && FOLLOW_UP.includes(picked) && (
+            <fieldset className="grid min-w-0 gap-2" style={{ border: "none", margin: 0, padding: 0 }}>
+              <legend style={{ font: `600 12px/1.45 ${SANS}`, color: "#7a6a62", padding: 0 }}>Email to (optional)</legend>
+              <input type="text" value={toName} onChange={(e) => setToName(e.target.value.slice(0, 120))} placeholder="Their name" autoComplete="off" aria-label="Their name" style={field} />
+              <input
+                type="email"
+                inputMode="email"
+                value={toEmail}
+                onChange={(e) => setToEmail(e.target.value.slice(0, 254))}
+                placeholder="Their email address"
+                autoComplete="off"
+                autoCapitalize="none"
+                aria-label="Their email address"
+                style={field}
+              />
+              <p style={{ font: `400 13px/1.45 ${SANS}`, color: "#7a6a62" }}>
+                {note.trim()
+                  ? "A follow-up email will be written from your note for you to check. Without an address you can add one later."
+                  : "Add a note and a follow-up email will be written from it for you to check."}
+              </p>
+            </fieldset>
+          )}
           <button type="button" onClick={() => void submit()} disabled={busy} style={{ ...pill, background: C.ink, color: C.surface, justifySelf: "start" }}>
             {busy ? "Saving…" : `Save: ${LABEL[picked]}`}
           </button>
@@ -525,6 +643,279 @@ function Outcome({
       {error && (
         <p className="mt-2" style={{ font: `400 13px/1.45 ${SANS}`, color: "#B3261E" }}>
           {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---- follow-up emails ------------------------------------------------------------
+
+/** Why something did not happen, in plain words. Codes come from the runner (API.md). */
+const WHY: Record<string, string> = {
+  no_recipient: "Add who it is to first.",
+  payload_mismatch: "It changed since you looked. Check it and press Send again.",
+  fails_checks: "It breaks one of the rules shown above. Change it first.",
+  sent_in_the_last_24_hours: "They had a follow-up in the last 24 hours. Try again tomorrow.",
+  cap_exceeded: "Today's limit of follow-up emails has been reached. It can go tomorrow.",
+  kill_switch: "Everything is stopped. It can go once you start things again.",
+  budget_exceeded: "Today's budget is used up.",
+  suppressed: "This business must not be contacted.",
+  not_interested: "They said they are not interested.",
+  no_mailbox: "No mailbox is connected for sending, so copy it and send it yourself.",
+  you_said_do_not_send: "You chose not to send it.",
+  replaced_by_a_newer_draft: "A newer one replaced it.",
+  recommend_only: "Follow-up emails are set to suggest only.",
+  already_sent: "It has already gone.",
+  draft_failed: "It could not be written to the rules. Try again.",
+  not_after_this_outcome: "A follow-up is written only after Interested, Call back or Meeting booked.",
+};
+const why = (code: string | null | undefined) => (code ? (WHY[code] ?? `Not done (${code.replace(/_/g, " ")}).`) : "");
+
+/** "18 Nov 16:20". */
+const when = (iso: string) => {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+};
+
+function FollowupSwitch({ roomId, list, setRung, onChanged }: { roomId: string; list: FollowupList; setRung: FollowupApi["setRung"]; onChanged: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const alone = list.rung >= 3;
+  const choose = async (rung: 2 | 3) => {
+    if (busy || (rung === 3) === alone) return;
+    setBusy(true);
+    setError("");
+    const r = await setRung(roomId, rung);
+    setBusy(false);
+    if (!r.ok) setError(`Not changed: ${why(r.reason)}`);
+    await onChanged();
+  };
+  const option = (rung: 2 | 3, label: string) => {
+    const on = (rung === 3) === alone;
+    return (
+      <button
+        type="button"
+        role="radio"
+        aria-checked={on}
+        disabled={busy}
+        onClick={() => void choose(rung)}
+        style={{ ...pill, minHeight: 40, padding: "0 12px", flex: "1 1 140px", background: on ? C.ink : "transparent", color: on ? C.surface : C.ink }}
+      >
+        {label}
+      </button>
+    );
+  };
+  return (
+    <div className="mt-4 min-w-0 rounded-xl p-3" style={{ border: `1px solid ${C.blush}` }}>
+      <span style={{ font: `600 10.5px/1.4 ${SANS}`, letterSpacing: "0.18em", textTransform: "uppercase", color: C.terracotta }}>Follow-up emails</span>
+      <div role="radiogroup" aria-label="Follow-up emails" className="mt-2 flex flex-wrap gap-2">
+        {option(2, "Ask me first")}
+        {option(3, "Send without asking")}
+      </div>
+      <p className="mt-2" style={{ font: `400 13px/1.45 ${SANS}`, color: "#4a3b34" }}>
+        {alone
+          ? "Each follow-up goes as soon as it is written, if you gave an email address. Never more than 20 a day, and never two to the same business within a day."
+          : "Each follow-up waits on its card until you press Send."}{" "}
+        {list.ownerMailbox.configured
+          ? `They go from ${list.ownerMailbox.address ?? "your mailbox"}.`
+          : "No mailbox is connected for sending yet, so nothing is sent: copy each one and send it yourself."}
+      </p>
+      {error && <p style={{ font: `400 13px/1.45 ${SANS}`, color: "#B3261E" }}>{error}</p>}
+    </div>
+  );
+}
+
+/** One follow-up email on its card: who it is to, what it says (editable), and Send, Don't send, Copy. */
+function FollowupCard({
+  followup,
+  writing,
+  mailbox,
+  rung,
+  api,
+  prospectId,
+  onChanged,
+}: {
+  followup: Followup | null;
+  writing: boolean;
+  mailbox: FollowupList["ownerMailbox"];
+  rung: number;
+  api: FollowupApi;
+  prospectId: string;
+  onChanged: () => Promise<void>;
+}) {
+  const [subject, setSubject] = useState(followup?.subject ?? "");
+  const [body, setBody] = useState(followup?.body ?? "");
+  const [toName, setToName] = useState(followup?.to?.name ?? "");
+  const [toEmail, setToEmail] = useState(followup?.to?.email ?? "");
+  const [seen, setSeen] = useState(followup?.updatedAt ?? "");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [copied, setCopied] = useState(false);
+  // A newer version from the runner replaces what is in the boxes (once saved, or written again).
+  if (followup && followup.updatedAt !== seen) {
+    setSeen(followup.updatedAt);
+    setSubject(followup.subject);
+    setBody(followup.body);
+    setToName(followup.to?.name ?? "");
+    setToEmail(followup.to?.email ?? "");
+  }
+
+  const label = <span style={{ font: `600 10.5px/1.4 ${SANS}`, letterSpacing: "0.18em", textTransform: "uppercase", color: C.terracotta }}>Follow-up email</span>;
+  if (!followup) {
+    return (
+      <div className="mt-3 rounded-xl p-3" style={{ background: C.panel }}>
+        {label}
+        <p className="mt-1" style={{ font: `400 14px/1.45 ${SANS}`, color: C.ink }}>
+          Writing the follow-up email from your note…
+        </p>
+      </div>
+    );
+  }
+
+  const open = ["draft", "waiting_for_you", "approved"].includes(followup.status);
+  const toChanged = toEmail.trim() !== (followup.to?.email ?? "") || toName.trim() !== (followup.to?.name ?? "");
+  const dirty = subject !== followup.subject || body !== followup.body || toChanged;
+  const run = async (work: () => Promise<FollowupAnswer>, done?: (r: Extract<FollowupAnswer, { ok: true }>) => string) => {
+    setBusy(true);
+    setMessage("");
+    const r = await work();
+    setBusy(false);
+    setMessage(r.ok ? (done?.(r) ?? "") : why(r.reason));
+    await onChanged();
+    return r;
+  };
+  const save = () => {
+    if (toEmail.trim() && !EMAIL.test(toEmail.trim())) {
+      setMessage("That email address does not look right.");
+      return;
+    }
+    void run(() =>
+      api.edit(followup.id, {
+        ...(subject !== followup.subject ? { subject } : {}),
+        ...(body !== followup.body ? { body } : {}),
+        ...(toChanged ? { to: toEmail.trim() ? { email: toEmail.trim(), ...(toName.trim() ? { name: toName.trim() } : {}) } : null } : {}),
+      }),
+    );
+  };
+  const send = () => void run(() => api.decide(followup.id, "send", followup.payloadHash), (r) => (r.status === "sent" ? "" : why(r.reason)));
+  const drop = () => void run(() => api.decide(followup.id, "dont_send", null));
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(`${followup.subject}\n\n${followup.body}`);
+    } catch {
+      setMessage("Could not copy here. Select the text and copy it by hand.");
+      return;
+    }
+    setCopied(true);
+    // With no mailbox connected, copying it is how it is approved: the yes is recorded, so nothing waits in the house.
+    if (!mailbox.configured && followup.status === "waiting_for_you" && followup.payloadHash) await api.decide(followup.id, "send", followup.payloadHash);
+    await run(() => api.edit(followup.id, { copied: true }));
+  };
+
+  const status =
+    followup.status === "sent" && followup.sentAt
+      ? `Sent ${when(followup.sentAt)}${followup.from ? ` from ${followup.from.split("@")[0]}@` : ""}`
+      : followup.copiedAt || copied
+        ? "Copied: send it yourself"
+        : followup.status === "sending"
+          ? "Sending…"
+          : followup.status === "failed"
+            ? `It may not have gone. Look in the Sent folder${followup.from ? ` of ${followup.from}` : ""} before sending it again.`
+            : followup.status === "not_sent"
+              ? `Not sent. ${why(followup.reason)}`
+              : !followup.to
+                ? "Add who it is to before it can be sent."
+                : !mailbox.configured
+                  ? "No mailbox is connected for sending: copy it and send it yourself."
+                  : followup.status === "approved"
+                    ? `You said send. Not gone yet: ${why(followup.reason) || "it will go when you press Send again."}`
+                    : rung >= 3
+                      ? "Ready. Press Send to send it."
+                      : "Waiting for you to press Send.";
+
+  return (
+    <div className="mt-3 min-w-0 rounded-xl p-3" style={{ background: C.panel }}>
+      {label}
+      <p className="mt-1" style={{ font: `600 13.5px/1.45 ${SANS}`, color: followup.status === "sent" ? "#1c7046" : C.ink }}>
+        {status}
+      </p>
+      {writing && <p style={{ font: `400 13px/1.45 ${SANS}`, color: "#7a6a62" }}>A new one is being written…</p>}
+
+      <div className="mt-2 grid min-w-0 gap-2">
+        <label style={{ font: `600 12px/1.45 ${SANS}`, color: "#7a6a62" }}>
+          To
+          {open ? (
+            <span className="mt-1 grid gap-2">
+              <input type="text" value={toName} onChange={(e) => setToName(e.target.value.slice(0, 120))} placeholder="Their name" aria-label="Their name" autoComplete="off" style={field} />
+              <input
+                type="email"
+                inputMode="email"
+                value={toEmail}
+                onChange={(e) => setToEmail(e.target.value.slice(0, 254))}
+                placeholder="Their email address"
+                aria-label="Their email address"
+                autoComplete="off"
+                autoCapitalize="none"
+                style={field}
+              />
+            </span>
+          ) : (
+            <span className="mt-1 block" style={{ font: `400 14px/1.45 ${SANS}`, color: C.ink }}>
+              {followup.to ? `${followup.to.name ? `${followup.to.name}, ` : ""}${followup.to.email}` : "nobody"}
+            </span>
+          )}
+        </label>
+        <label style={{ font: `600 12px/1.45 ${SANS}`, color: "#7a6a62" }}>
+          Subject
+          <input type="text" value={subject} readOnly={!open} onChange={(e) => setSubject(e.target.value.slice(0, 200))} style={{ ...field, display: "block", marginTop: 4 }} />
+        </label>
+        <label style={{ font: `600 12px/1.45 ${SANS}`, color: "#7a6a62" }}>
+          Message
+          <textarea value={body} readOnly={!open} onChange={(e) => setBody(e.target.value.slice(0, 4000))} rows={9} style={{ ...field, display: "block", marginTop: 4, resize: "vertical" }} />
+        </label>
+        {followup.problems.length > 0 && !dirty && (
+          <ul style={{ margin: 0, paddingLeft: 18, font: `400 13px/1.45 ${SANS}`, color: "#B3261E" }}>
+            {followup.problems.map((p) => (
+              <li key={p}>{p.charAt(0).toUpperCase() + p.slice(1)}.</li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {open && dirty && (
+          <button type="button" disabled={busy} onClick={save} style={{ ...pill, background: C.ink, color: C.surface }}>
+            {busy ? "Saving…" : "Save changes"}
+          </button>
+        )}
+        {open && !dirty && mailbox.configured && (
+          <button
+            type="button"
+            disabled={busy || !followup.to || followup.problems.length > 0}
+            onClick={send}
+            style={{ ...pill, background: C.ink, color: C.surface, opacity: !followup.to || followup.problems.length > 0 ? 0.45 : 1 }}
+          >
+            {busy ? "Sending…" : "Send"}
+          </button>
+        )}
+        {open && (
+          <button type="button" disabled={busy} onClick={drop} style={pill}>
+            Don&apos;t send
+          </button>
+        )}
+        <button type="button" disabled={busy || dirty} onClick={() => void copy()} style={pill}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+        {!open && followup.status !== "sending" && (
+          <button type="button" disabled={busy} onClick={() => void run(() => api.request(prospectId), () => "A new one is being written.")} style={pill}>
+            Write it again
+          </button>
+        )}
+      </div>
+      {message && (
+        <p className="mt-2" style={{ font: `400 13px/1.45 ${SANS}`, color: "#4a3b34" }}>
+          {message}
         </p>
       )}
     </div>

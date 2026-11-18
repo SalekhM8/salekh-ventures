@@ -111,5 +111,35 @@ export const enquiryAction: ActionType<EnquiryPayload> = {
   privatePayload: true,
 };
 
+// ---------------------------------------------------------------------------
+// The follow-up email after a call. Sent from the OWNER's mailbox, to an address
+// Salekh gave, about a call he made. Never to an address the system found.
+// ---------------------------------------------------------------------------
+
+export const followupPayload = z.strictObject({
+  /** The row in `followups` this is. The connector sends only what that row says. */
+  followup_id: uuidText,
+  prospect_id: uuidText,
+  to: z.string().email().max(254),
+  subject: z.string().min(1).max(200),
+  body: z.string().min(1).max(4000),
+});
+
+export type FollowupPayload = z.infer<typeof followupPayload>;
+
+/**
+ * Send one follow-up email from the owner's mailbox. Seeded at rung 2 (each needs his yes); the owner may raise it
+ * to rung 3 ("don't ask me for this kind") and lower it again. Hard ceiling: rung 3, never silent. Cannot be undone.
+ */
+export const followupAction: ActionType<FollowupPayload> = {
+  name: "followup.send_email",
+  payload: followupPayload,
+  maxRung: 3,
+  cap: { key: "followups_per_day", window: "day", units: () => 1 },
+  undoable: false,
+  connector: "owner-mail",
+  privatePayload: true,
+};
+
 /** The list the runner uses. */
-export const actionTypes: ActionTypeRegistry = createActionTypeRegistry([dummyAction, enquiryAction]);
+export const actionTypes: ActionTypeRegistry = createActionTypeRegistry([dummyAction, enquiryAction, followupAction]);

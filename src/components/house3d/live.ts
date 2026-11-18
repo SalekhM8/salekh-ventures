@@ -29,7 +29,32 @@ type ApiHouse = {
 export type CallOutcome = "no_answer" | "call_back" | "interested" | "meeting_booked" | "not_interested" | "wrong_person";
 export type CallRecord = { outcome: CallOutcome; note: string | null; followUpOn: string | null; at: string };
 export type ProspectCalls = { prospectId: string; name: string; latest: CallRecord | null; history: CallRecord[] };
-export type OutcomeInput = { outcome: CallOutcome; note?: string; followUpOn?: string };
+export type OutcomeInput = { outcome: CallOutcome; note?: string; followUpOn?: string; followUpTo?: { name?: string; email: string } };
+
+/** A follow-up email after a call. Personal data (who it is to, what it says): kept in memory only. */
+export type FollowupStatus = "draft" | "waiting_for_you" | "approved" | "sending" | "sent" | "failed" | "not_sent";
+export type Followup = {
+  id: string;
+  prospectId: string;
+  business: string;
+  status: FollowupStatus;
+  outcome: string | null;
+  to: { name: string | null; email: string } | null;
+  subject: string;
+  body: string;
+  problems: string[];
+  payloadHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sentAt: string | null;
+  from: string | null;
+  copiedAt: string | null;
+  reason: string | null;
+};
+export type FollowupList = { followups: Followup[]; rung: number; ownerMailbox: { configured: boolean; address: string | null }; drafting: string[] };
+export type FollowupEdit = { subject?: string; body?: string; to?: { name?: string; email: string } | null; copied?: true };
+/** What came back: the follow-up's new state, or why not. */
+export type FollowupAnswer = { ok: true; status?: string; reason?: string; followup?: Followup } | { ok: false; reason: string };
 
 const API_DEPT_TO_UI = Object.fromEntries((Object.keys(DEPT_API) as DeptKey[]).map((k) => [DEPT_API[k], k])) as Record<string, DeptKey>;
 
@@ -203,7 +228,28 @@ export function useLiveHouse(enabled = true) {
     return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
   }, []);
 
-  return { connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome };
+  /** The follow-up emails of one room, with the rung and whether a mailbox is connected to send them. */
+  const followups = useCallback(async (roomId: string): Promise<FollowupList | null> => {
+    const r = await call(`v1/rooms/${toApi(roomId)}/followups`);
+    return r.ok && Array.isArray(r.json.followups) ? (r.json as unknown as FollowupList) : null;
+  }, []);
+  const answer = (r: { ok: boolean; status: number; json: Record<string, unknown> }): FollowupAnswer =>
+    r.ok
+      ? { ok: true, ...(typeof r.json.status === "string" ? { status: r.json.status } : {}), ...(typeof r.json.reason === "string" ? { reason: r.json.reason } : {}), ...(r.json.followup ? { followup: r.json.followup as Followup } : {}) }
+      : { ok: false, reason: String(r.json.reason ?? r.json.error ?? `error ${r.status}`) };
+  const editFollowup = useCallback(async (id: string, body: FollowupEdit) => answer(await call(`v1/followups/${encodeURIComponent(id)}`, body)), []);
+  const decideFollowup = useCallback(
+    async (id: string, decision: "send" | "dont_send", payloadHash: string | null) =>
+      answer(await call(`v1/followups/${encodeURIComponent(id)}/decision`, decision === "send" ? { decision, payloadHash } : { decision })),
+    [],
+  );
+  const requestFollowup = useCallback(async (prospectId: string) => answer(await call(`v1/prospects/${encodeURIComponent(prospectId)}/followup`, {})), []);
+  const setFollowupRung = useCallback(async (roomId: string, rung: 2 | 3) => answer(await call(`v1/rooms/${toApi(roomId)}/followup-rung`, { rung })), []);
+
+  return {
+    connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome,
+    followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung,
+  };
 }
 
 export const RUN_REFUSED: Record<string, string> = {

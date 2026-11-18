@@ -162,9 +162,13 @@ export async function seed(input: SeedInput): Promise<{ tenantId: string; tenant
         if (department === "outreach") await addConfig(row.business_id, "setting", "outreach", toStoredForm(parseOutreachSettings({ area: "England", find_per_run: 50, areas: [...ENGLISH_PLACES], areas_per_run: 8 })));
         if (department === "outreach") {
           // Test enquiries by email: an allowance of 30 a day (a count, not money), and rung 2, so that every one
-          // needs Salekh's yes. The action's ceiling in code is rung 3. Nothing else on this floor has a cap or a rung.
+          // needs Salekh's yes. The action's ceiling in code is rung 3. 
           await addConfig(row.business_id, "cap", "enquiries_per_day", { limit: 30 });
           await addConfig(row.business_id, "rung", "enquiry.send_email", { rung: 2 });
+          // Follow-up emails after a call, from the owner's mailbox: 20 a day, and rung 2 (each needs his yes) until he
+          // ticks "send without asking". The ceiling in code is rung 3.
+          await addConfig(row.business_id, "cap", "followups_per_day", { limit: 20 });
+          await addConfig(row.business_id, "rung", "followup.send_email", { rung: 2 });
         }
         if (LIVE_ROOMS.some(([f, d]) => f === floor.slug && d === department)) {
           // Outreach runs itself each morning (Salekh's brief: a shortlist by 9am). Every other room runs on request.

@@ -4,7 +4,7 @@ import { createSdkDriver } from "./agents/sdk-driver.js";
 import { createAnthropicCaller } from "./agents/model-caller.js";
 import { agentReachFromEnv } from "./control/connectors/agent-reach.js";
 import { companiesHouseFromKey } from "./control/connectors/companies-house.js";
-import { mailboxFromEnv } from "./control/connectors/mailbox.js";
+import { mailboxFromEnv, ownerMailboxFromEnv } from "./control/connectors/mailbox.js";
 import { placesFromKey } from "./control/connectors/places.js";
 import { createDirectReader } from "./control/connectors/direct-read.js";
 import { createPostHogConnector } from "./control/connectors/posthog.js";
@@ -92,6 +92,10 @@ function buildRuntime() {
     ? "TEST_MAILBOX_ADDRESS, GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET and GMAIL_OAUTH_REFRESH_TOKEN are not all set: no test enquiry will be drafted, sent or read."
     : "TEST_MAILBOX_ADDRESS and TEST_MAILBOX_APP_PASSWORD are not both set: no test enquiry will be drafted, sent or read.");
   else console.log(`mail transport: ${mailbox.transport ?? "smtp_imap"}`);
+  const owner = ownerMailboxFromEnv(env);
+  console.log(owner.mailbox
+    ? "owner mailbox: connected over the Gmail API (follow-up emails can be sent from it)"
+    : `owner mailbox: not connected (${owner.why}). Follow-up emails are drafted and approved, then copied and sent by hand.`);
   if (!env.GOOGLE_PLACES_API_KEY) console.log("GOOGLE_PLACES_API_KEY is not set: businesses are found by web search, as before.");
   if (!env.COMPANIES_HOUSE_API_KEY) console.log("COMPANIES_HOUSE_API_KEY is not set: companies will be recorded as not checked.");
 
@@ -112,6 +116,8 @@ function buildRuntime() {
     directReader: env.DIRECT_READ === "off" ? null : createDirectReader(),
     // The test mailbox: read here, by the runner, and given to nothing but the gateway's mail connector.
     mailbox,
+    // The owner's mailbox: read here, and given to nothing but the follow-up connector.
+    ownerMailbox: owner.mailbox,
     // Read at the moment of each run, so a key added later needs no restart of anything but this process's env.
     apiKeyFor: (tenantSlug) => env[apiKeyEnvName(tenantSlug)] || undefined,
     usdToGbp: rate,

@@ -5,7 +5,7 @@ import { DEPARTMENTS, type DepartmentDef } from "./agents/departments.js";
 import type { AgentDriver, DriverResult } from "./agents/driver.js";
 import { prepareSession, type ToolCallLog } from "./agents/session.js";
 import type { MetricRow, ToolBackend } from "./agents/tools.js";
-import { actionTypes as defaultActionTypes, type ActionTypeRegistry } from "./control/action-types.js";
+import { actionTypes as defaultActionTypes, createActionTypeRegistry, followupAction, type ActionType, type ActionTypeRegistry } from "./control/action-types.js";
 import { engageKillSwitch, readCurrent, resumeKillSwitch } from "./control/config.js";
 import type { Connector } from "./control/connectors/connector.js";
 import { createDummyConnector } from "./control/connectors/dummy.js";
@@ -26,6 +26,7 @@ import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
 import { emitEvent, type EventInput } from "./control/events.js";
 import { checkOutcome, listCalls, recordOutcome, type CallsOfProspect } from "./outreach/calls.js";
+import { checkRecipient, createFollowupConnector, createFollowups, DRAFT_OUTCOMES, FOLLOWUP_ACTION, type FollowupView } from "./outreach/followups.js";
 import { createGateway, type Gateway } from "./control/gateway.js";
 import { finishRun, startRun, tenantDay } from "./control/runs.js";
 import { pullTraffic } from "./jobs/pull-traffic.js";
@@ -77,6 +78,11 @@ export interface RuntimeOptions {
   sleep?: (ms: number) => Promise<void>;
   /** The test mailbox. null: not configured, so no test enquiry is drafted, sent or read. */
   mailbox?: Mailbox | null;
+  /**
+   * The OWNER's mailbox (hello@...), for follow-up emails after a call. A different mailbox from the test one, held
+   * only by the follow-up connector. null: not connected, so follow-ups are drafted and approved but never sent.
+   */
+  ownerMailbox?: Mailbox | null;
 }
 
 export type RoomState = "idle" | "working" | "waiting" | "done" | "failed" | "handoff";
@@ -145,6 +151,16 @@ export interface Runtime {
   recordCallOutcome(prospectId: string, body: unknown): Promise<Answer<{ ok: true }>>;
   /** Every business in one room with a card or a recorded call, and its calls. Personal data (the notes), on purpose. */
   listCalls(roomId: string): Promise<Answer<{ calls: CallsOfProspect[] }>>;
+  /** The follow-up emails of one room, the rung they are at and whether the owner's mailbox is connected. Personal data, on purpose. */
+  listFollowups(roomId: string): Promise<Answer<{ followups: FollowupView[]; rung: number; ownerMailbox: { configured: boolean; address: string | null }; drafting: string[] }>>;
+  /** Change a follow-up's subject, message or recipient (any change voids a yes), or note that it was copied. */
+  editFollowup(id: string, body: unknown): Promise<Answer<{ followup: FollowupView }>>;
+  /** "Send" (with the hash shown) or "Don't send". */
+  decideFollowup(id: string, body: unknown): Promise<Answer<{ result: { status: string; reason?: string } }>>;
+  /** Ask for a follow-up to be drafted (again) for one business, with an optional note and recipient. */
+  requestFollowup(prospectId: string, body: unknown): Promise<Answer<{ ok: true }>>;
+  /** The owner's switch for follow-up emails: 2, ask me first; 3, send without asking. */
+  setFollowupRung(roomId: string, body: unknown): Promise<Answer<{ rung: number }>>;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -170,6 +186,14 @@ const TASK: Record<RoomState, string> = {
 /** Departments that are a pipeline, with the prompt files each needs in agents/. */
 const PIPELINES: Record<string, string[]> = { outreach: ["outreach-find.md", "outreach-analyse.md", "outreach-draft.md", "outreach-enquiry.md", "outreach-reply.md"] };
 
+/** A count only, never who: "12 enquiries and 1 follow-up email waiting for your yes". */
+function waitingLine(counts: { enquiries?: number; followups?: number } | undefined): string {
+  const e = counts?.enquiries ?? 0;
+  const f = counts?.followups ?? 0;
+  const parts = [e > 0 ? `${e} ${e === 1 ? "enquiry" : "enquiries"}` : "", f > 0 ? `${f} follow-up ${f === 1 ? "email" : "emails"}` : ""].filter(Boolean);
+  return parts.length ? `${parts.join(" and ")} waiting for your yes` : TASK.waiting;
+}
+
 const DONE_FOR_MS = 60_000;
 const HANDOFF_FOR_MS = 10_000;
 const HANDOFFS_LISTED_FOR_MS = 30_000;
@@ -186,12 +210,18 @@ interface Room {
 export function createRuntime(options: RuntimeOptions): Runtime {
   const { gatewayDb, uiDb, agentDb, tenantId } = options;
   const clock = options.now ?? (() => new Date());
-  const actionTypes = options.actionTypes ?? defaultActionTypes;
+  const given = options.actionTypes ?? defaultActionTypes;
+  // The follow-up email is always on the list: the runtime holds its connector.
+  const actionTypes: ActionTypeRegistry = given.get(followupAction.name)
+    ? given
+    : createActionTypeRegistry([...given.names().map((n) => given.get(n) as ActionType), followupAction]);
   const standby = options.role === "standby";
   let unreachableInARow = 0;
   let mailState: MailCheck | null = null;
   // On a standby the mailbox is not held at all: nothing in this process can send from it or read it.
   const mailbox = standby ? null : (options.mailbox ?? null);
+  // Likewise the owner's mailbox: a standby sends no follow-up.
+  const ownerMailbox = standby ? null : (options.ownerMailbox ?? null);
   const gateway = createGateway({
     db: gatewayDb,
     actionTypes,
@@ -203,7 +233,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         if (unreachableInARow >= 2) await tripBreaker(gatewayDb, tenantId, businessId, "mail_unreachable", clock(), code);
       },
       onSent: () => { unreachableInARow = 0; },
-    }) },
+    }),
+    // The owner's mailbox, for follow-ups after a call. Only this connector holds it.
+    "owner-mail": createFollowupConnector({ db: gatewayDb, mailbox: ownerMailbox, now: clock }) },
     now: clock,
   });
   const inFlight = new Map<string, Promise<void>>();
@@ -270,8 +302,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         [now],
       );
       const pendingCounts = await tx.query(
-        "select business_id, department, count(*)::int as n from approvals where status = 'pending' and expires_at > $1 group by business_id, department",
-        [now],
+        `select business_id, department, count(*)::int as n,
+                count(*) filter (where action_type = $2)::int as enquiries, count(*) filter (where action_type = $3)::int as followups
+           from approvals where status = 'pending' and expires_at > $1 group by business_id, department`,
+        [now, ENQUIRY_ACTION, FOLLOWUP_ACTION],
       );
       const recent = await tx.query(
         `select seq, business_id, department, type, summary, created_at, payload ->> 'to' as handed_to from (
@@ -351,8 +385,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
             state,
             task: state === "working" ? (((stageOf.get(k)?.[0] as any)?.summary as string | undefined) ?? TASK[state])
               // A count only: who the enquiries are for is in the approvals list, never here.
-              : state === "waiting" && approval.action_type === ENQUIRY_ACTION
-                ? `${(pendingOf.get(k)?.[0] as any)?.n ?? 1} ${((pendingOf.get(k)?.[0] as any)?.n ?? 1) === 1 ? "enquiry" : "enquiries"} waiting for your yes`
+              : state === "waiting" && (approval.action_type === ENQUIRY_ACTION || approval.action_type === FOLLOWUP_ACTION)
+                ? waitingLine(pendingOf.get(k)?.[0] as any)
                 : TASK[state],
             pendingApprovalId: approval?.approval_id ?? null,
             proposal: approval
@@ -460,6 +494,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!known.member) return { status: 409, reason: "no_owner" };
     changed();
     const say = (status: string, reason?: string) => ({ status: 200 as const, result: reason ? { status, reason } : { status } });
+
+    // A follow-up email: the same code as the card's Send and Don't send buttons.
+    if (known.approval.action_type === FOLLOWUP_ACTION) {
+      if (standby) return { status: 409, reason: "standby" };
+      const r = await followups.decideByApproval(id, decision, typeof payloadHash === "string" ? payloadHash : undefined);
+      changed();
+      if (!r) return say("refused", "not_found");
+      if (r.status === 404) return { status: 404 };
+      if (r.status !== 200) return say("refused", r.reason);
+      const st = r.result.status;
+      return say(st === "not_sent" ? "rejected" : st === "waiting_for_you" ? "refused" : "approved", r.result.reason);
+    }
 
     // A test enquiry is not sent the moment it is approved. The answer is recorded by the same code as any
     // approval, and the sender then sends approved enquiries one at a time with a gap between them.
@@ -804,13 +850,66 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return { status: 200, enquiries: await listEnquiries(gatewayDb, tenantId, room.businessId, from) };
   };
 
+  // ---- follow-up emails after a call -----------------------------------------
+
+  const followups = createFollowups({
+    db: gatewayDb, uiDb, gateway, tenantId, clock, mailbox: ownerMailbox, model: options.model ?? null,
+    apiKey: async () => {
+      const tenant = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select slug from tenants where tenant_id = wh_tenant()")).rows[0]);
+      return options.apiKeyFor((tenant?.slug as string | null) ?? "") ?? null;
+    },
+    whRoot: options.whRoot, usdToGbp: options.usdToGbp, settingsOf: (businessId) => settingsOf(businessId),
+    ownerId: () => gatewayDb.tx(tenantId, ownerId), changed,
+  });
+  const track = (key: string, work: Promise<void>) => { inFlight.set(key, work.finally(() => inFlight.delete(key))); };
+
   const recordCallOutcome: Runtime["recordCallOutcome"] = async (prospectId, body) => {
     const checked = checkOutcome(body);
     if (!checked.ok) return { status: 422, reason: checked.reason };
+    // Who a follow-up email is to, when Salekh gives it with the outcome. Never guessed: without it, the draft has no recipient.
+    const given = (body as { followUpTo?: unknown } | null)?.followUpTo;
+    const to = checkRecipient(given);
+    if (!to.ok) return { status: 422, reason: `followUpTo: ${to.reason}` };
+    if (to.to && !(DRAFT_OUTCOMES as readonly string[]).includes(checked.outcome)) return { status: 422, reason: "followUpTo goes only with interested, call_back or meeting_booked" };
     const done = await recordOutcome(gatewayDb, tenantId, prospectId, checked, clock());
     if (!done) return { status: 404 };
     changed();
+    // Interested, call back or meeting booked, with a note: a follow-up email is drafted (in the background; a standby drafts nothing).
+    if (!standby && checked.note && (DRAFT_OUTCOMES as readonly string[]).includes(checked.outcome)) {
+      followups.draftLater(prospectId, { outcome: checked.outcome as (typeof DRAFT_OUTCOMES)[number], note: checked.note, to: to.to }, track);
+    }
     return { status: 200, ok: true };
+  };
+
+  const listFollowupsOf: Runtime["listFollowups"] = async (roomId) => {
+    const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
+    if (!room) return { status: 404 };
+    return { status: 200, ...(await followups.list(room.businessId)) };
+  };
+  const editFollowup: Runtime["editFollowup"] = (id, body) => followups.edit(id, body);
+  const decideFollowup: Runtime["decideFollowup"] = async (id, body) => (standby ? { status: 409, reason: "standby" } : followups.decide(id, body));
+  const requestFollowup: Runtime["requestFollowup"] = async (prospectId, body) => {
+    if (standby) return { status: 409, reason: "standby" };
+    const b = (body ?? {}) as { note?: unknown; to?: unknown };
+    if (b.note !== undefined && b.note !== null && (typeof b.note !== "string" || b.note.length > 1000)) return { status: 422, reason: "note must be text of at most 1000 characters" };
+    const to = checkRecipient(b.to);
+    if (!to.ok) return { status: 422, reason: to.reason };
+    if (!isUuid(prospectId)) return { status: 404 };
+    const known = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select 1 from prospects where prospect_id = $1 and purged_at is null", [prospectId])).rows.length > 0);
+    if (!known) return { status: 404 };
+    const note = typeof b.note === "string" && b.note.trim() ? b.note.trim() : null;
+    // The latest call must be one a follow-up goes with, and there must be a note: this one, or the call's own.
+    const latest = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select outcome, note from call_outcomes where prospect_id = $1 order by created_at desc, call_outcome_id desc limit 1", [prospectId])).rows[0]);
+    if (!latest || !(DRAFT_OUTCOMES as readonly string[]).includes(latest.outcome)) return { status: 409, reason: "not_after_this_outcome" };
+    if (!note && !latest.note) return { status: 422, reason: "a note is needed: what was said on the call" };
+    followups.draftLater(prospectId, { note: note ?? latest.note, ...(to.to ? { to: to.to } : {}) }, track);
+    changed();
+    return { status: 200, ok: true };
+  };
+  const setFollowupRung: Runtime["setFollowupRung"] = async (roomId, body) => {
+    const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
+    if (!room) return { status: 404 };
+    return followups.setRung(room.businessId, body);
   };
 
   const listCallsOf: Runtime["listCalls"] = async (roomId) => {
@@ -1082,5 +1181,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

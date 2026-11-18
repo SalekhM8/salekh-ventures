@@ -14,6 +14,9 @@ import { GMAIL_SCOPES } from "./control/connectors/gmail-api.js";
  *   3. receives Google's answer on that listener, checks it is the answer to this request, and exchanges it;
  *   4. writes the refresh token into runner/.env.railway as GMAIL_OAUTH_REFRESH_TOKEN, without printing it.
  *
+ * `npm run gmail-authorise -- --owner` does the same for the OWNER's mailbox (follow-up emails after a call) and
+ * writes OWNER_GMAIL_OAUTH_REFRESH_TOKEN instead. Sign in as that mailbox, not the test one.
+ *
  * It asks for two permissions and no more: sending mail, and reading mail. It needs GMAIL_OAUTH_CLIENT_ID and
  * GMAIL_OAUTH_CLIENT_SECRET (an OAuth client of type "Desktop app"), from the environment or runner/.env.
  * See DEPLOY.md for the Google Cloud side.
@@ -54,6 +57,10 @@ async function main(): Promise<void> {
     console.error("GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET are needed (in the environment or in runner/.env).");
     process.exit(1);
   }
+  // --owner: the owner's own mailbox (hello@...), for follow-up emails, written as OWNER_GMAIL_OAUTH_REFRESH_TOKEN.
+  const owner = process.argv.includes("--owner");
+  const variable = owner ? "OWNER_GMAIL_OAUTH_REFRESH_TOKEN" : "GMAIL_OAUTH_REFRESH_TOKEN";
+  const who = owner ? "the OWNER MAILBOX (the address follow-up emails are sent from, OWNER_MAIL_ADDRESS)" : "the TEST MAILBOX";
   const out = path.resolve(process.env.GMAIL_AUTHORISE_OUT ?? ".env.railway");
   const state = randomBytes(24).toString("base64url");
   const verifier = randomBytes(48).toString("base64url");
@@ -79,7 +86,7 @@ async function main(): Promise<void> {
       const redirectUri = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
       (server as unknown as { redirectUri: string }).redirectUri = redirectUri;
       redirect = redirectUri;
-      console.log("Open this address in a browser while signed in as the TEST MAILBOX, and allow the two permissions it asks for (send mail, read mail):\n");
+      console.log(`Open this address in a browser while signed in as ${who}, and allow the two permissions it asks for (send mail, read mail):\n`);
       console.log(consentUrl({ clientId, redirectUri, state, challenge }));
       console.log("\nWaiting for Google to answer on this machine (up to ten minutes)...");
     });
@@ -96,9 +103,11 @@ async function main(): Promise<void> {
   if (granted.length > 0 && JSON.stringify(granted) !== JSON.stringify([...GMAIL_SCOPES].sort())) {
     throw new Error("the permissions given are not exactly the two asked for (send mail, read mail). Nothing was written. Run it again and tick both.");
   }
-  writeEnvValue(out, "GMAIL_OAUTH_REFRESH_TOKEN", json.refresh_token);
-  console.log(`\nThe refresh token was written to ${out} as GMAIL_OAUTH_REFRESH_TOKEN. It has not been printed.`);
-  console.log("Set it on the server with GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET and MAIL_TRANSPORT=gmail_api (see DEPLOY.md).");
+  writeEnvValue(out, variable, json.refresh_token);
+  console.log(`\nThe refresh token was written to ${out} as ${variable}. It has not been printed.`);
+  console.log(owner
+    ? "Set it on the server with OWNER_MAIL_ADDRESS (and the OAuth client, GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET, or OWNER_GMAIL_OAUTH_CLIENT_ID and _SECRET). See DEPLOY.md."
+    : "Set it on the server with GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET and MAIL_TRANSPORT=gmail_api (see DEPLOY.md).");
 }
 
 let redirect = "";

@@ -39,6 +39,8 @@ Names only. **S** marks a secret.
 | `GOOGLE_PLACES_API_KEY` | **S** | Finding businesses. Without it and with no search tool, Outreach cannot run. |
 | `TEST_MAILBOX_ADDRESS`, `TEST_MAILBOX_APP_PASSWORD` | **S** | The test mailbox. Set on the primary only. |
 | `COMPANIES_HOUSE_API_KEY` | **S** | Optional. Without it companies are "not checked". |
+| `OWNER_MAIL_ADDRESS` | **S** (personal) | Optional. The OWNER's mailbox follow-up emails after a call are sent from (for example `hello@salekhventures.com`). Never the test mailbox (the same address is refused). Unset: follow-ups are drafted and approved, never sent, and each card offers a copy to send by hand. |
+| `OWNER_GMAIL_OAUTH_REFRESH_TOKEN` | **S** | The owner mailbox's own refresh token, from `npm run gmail-authorise -- --owner`. Sent over the Gmail API, with the same OAuth client as the test mailbox (`GMAIL_OAUTH_CLIENT_ID`, `_SECRET`) unless `OWNER_GMAIL_OAUTH_CLIENT_ID` and `OWNER_GMAIL_OAUTH_CLIENT_SECRET` are set. |
 | `POSTHOG_PERSONAL_API_KEY`, `POSTHOG_PROJECT_ID`, `POSTHOG_HOST` | **S** (the key) | Optional. Traffic totals for the Data room. |
 | `WH_USD_TO_GBP` | | Optional. Without it a placeholder rate is used and said so in the log. |
 | `PORT` | | Set by Railway. |
@@ -48,11 +50,11 @@ Do **not** set on this service: `AGENT_REACH_BIN` (the tool is not in the image;
 
 ## Order of operations
 
-1. **Before anything, on the Mac:** `npm run build && npm run check-schemas`. All five must pass.
+1. **Before anything, on the Mac:** `npm run build && npm run check-schemas`. All six must pass.
 2. **On the Mac, with nothing waiting to be sent:** reject or let expire any enquiry approvals still pending in `wh_dev`, and do not approve any more there. See "Starting with an empty list" below.
 3. **Export the settings:** `npm run export-config` to read them, then `npm run export-config -- --base64` for the one line to paste. It prints on stderr how many suppressions it left out (those that are about people). If that number is not 0, add them on the server by hand.
 4. **Set the variables** in the table on the Railway service. `WH_ROLE` unset or `primary`.
-5. **Deploy.** Watch the log for one line: `bootstrap: <n> migrations applied, 3 logins set, tenant ready, ...` (11 migrations on a first boot; on a database already set up, only the new ones). Then `white-house-runner listening on 0.0.0.0:<port> (API v1 on)`.
+5. **Deploy.** Watch the log for one line: `bootstrap: <n> migrations applied, 3 logins set, tenant ready, ...` (17 migrations on a first boot; on a database already set up, only the new ones). Then `white-house-runner listening on 0.0.0.0:<port> (API v1 on)`.
 6. **Check:** `GET /health` answers `{"status":"ok"}` with no token. `GET /v1/house` answers 401 without the token and the house with it.
 7. **Set the Mac to standby:** `WH_ROLE=standby` in `runner/.env`, restart the local runner. From then on it starts no runs, sends nothing and does not look in the mailbox.
 8. **Point the site's server** at the Railway URL with the same `WH_API_TOKEN`.
@@ -136,6 +138,16 @@ npm run build && npm run gmail-authorise
 It prints a Google address. Open it in a browser **signed in as the test mailbox**, allow the two permissions, and it writes `GMAIL_OAUTH_REFRESH_TOKEN` into `runner/.env.railway` without printing it. Copy that value, the client id and the secret to the Railway service, set `MAIL_TRANSPORT=gmail_api`, and redeploy. `TEST_MAILBOX_ADDRESS` stays; `TEST_MAILBOX_APP_PASSWORD` is no longer used.
 
 **The catch: a refresh token expires after 7 days while the app's publishing status is "Testing"** (for an External app). Sending would then stop a week later with "the test mailbox refused the login (EAUTH)". To avoid it, either set the app's publishing status to **In production** (for one mailbox and these scopes it can stay unverified: Google shows an "unverified app" warning once at consent, which you accept), or use user type **Internal** with a Workspace mailbox. Then run `npm run gmail-authorise` again, because a token issued while in Testing still expires. I am stating this from Google's documentation as I know it, not from having done it here: check the consent screen's own wording when you set it up.
+
+### The owner's mailbox, for follow-up emails
+
+Follow-ups are written from Salekh, to someone he has spoken to, so they go from his own address and never from the test mailbox. Until this is set up they are copied from the card and sent by hand: that works with nothing below done.
+
+1. In the same Google Cloud project, on the OAuth consent screen, add the owner's address (for example `hello@salekhventures.com`) as a test user (or, for a Workspace you administer, use user type Internal). The same two scopes.
+2. On the Mac: `npm run build && npm run gmail-authorise -- --owner`. Open the address it prints **signed in as the owner's mailbox** (the Google account that owns that address, not the test mailbox) and allow both permissions. It writes `OWNER_GMAIL_OAUTH_REFRESH_TOKEN` into `runner/.env.railway` without printing it.
+3. On the Railway service set `OWNER_MAIL_ADDRESS` and `OWNER_GMAIL_OAUTH_REFRESH_TOKEN` (the client id and secret are already there for the test mailbox) and redeploy. The log then says `owner mailbox: connected over the Gmail API`.
+
+If the address is an alias ("send mail as") of another Google account rather than an account of its own, sign in as the account that owns it at step 2: Gmail only sends From an address that account may use. The 7 day expiry of refresh tokens in "Testing" (above) applies to this token too. Not tested against Google: the transport is the one the test mailbox uses, tested against a stub.
 
 ### Putting back the four from this morning
 

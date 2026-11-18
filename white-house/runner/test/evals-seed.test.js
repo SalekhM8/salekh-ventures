@@ -131,7 +131,7 @@ const snapshot = async (tenantId) => ({
   config: await rows(h, "select kind, count(*)::int as n from config_versions where tenant_id = $1 group by kind order by kind", [tenantId]),
 });
 
-test("seed: tenant one, an owner from the environment, four floors, budgets, and one cap and one rung, both for test enquiries", async () => {
+test("seed: tenant one, an owner from the environment, four floors, budgets, and a cap and a rung each for test enquiries and follow-up emails", async () => {
   const input = seedInput();
   const first = await seed(input);
   const state = await snapshot(first.tenantId);
@@ -145,8 +145,9 @@ test("seed: tenant one, an owner from the environment, four floors, budgets, and
   assert.deepEqual(state.config.map((c) => c.kind), ["budget", "cap", "rung", "schedule", "setting"], "no target, no kill switch");
   // The one cap and the one rung are for test enquiries by email: 30 a day, each needing a yes.
   assert.deepEqual(
-    await rows(h, "select b.slug, c.kind, c.key, c.value from config_versions c join businesses b using (business_id) where c.tenant_id = $1 and c.kind in ('cap', 'rung') order by c.kind", [first.tenantId]),
-    [{ slug: "salekh-ventures", kind: "cap", key: "enquiries_per_day", value: { limit: 30 } }, { slug: "salekh-ventures", kind: "rung", key: "enquiry.send_email", value: { rung: 2 } }],
+    await rows(h, "select b.slug, c.kind, c.key, c.value from config_versions c join businesses b using (business_id) where c.tenant_id = $1 and c.kind in ('cap', 'rung') order by c.kind, c.key", [first.tenantId]),
+    [{ slug: "salekh-ventures", kind: "cap", key: "enquiries_per_day", value: { limit: 30 } }, { slug: "salekh-ventures", kind: "cap", key: "followups_per_day", value: { limit: 20 } },
+     { slug: "salekh-ventures", kind: "rung", key: "enquiry.send_email", value: { rung: 2 } }, { slug: "salekh-ventures", kind: "rung", key: "followup.send_email", value: { rung: 2 } }],
   );
   assert.equal(state.config[0].n, 18, "one budget per room, and one for the Chief of Staff");
   const [outreach] = await rows(h, "select value from config_versions where tenant_id = $1 and kind = 'setting' and key = 'outreach'", [first.tenantId]);

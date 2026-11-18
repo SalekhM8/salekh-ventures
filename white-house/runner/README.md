@@ -170,6 +170,10 @@ A business's own pages are read directly by the runner (`src/control/connectors/
 
 `MAIL_TRANSPORT=smtp_imap` (default) or `gmail_api` (HTTPS only, for hosts that block SMTP; `npm run gmail-authorise` fetches its refresh token). A send that never reached the mail server is put back in the queue, never marked failed. See `DEPLOY.md`.
 
+## Follow-up emails after a call
+
+After Salekh records Interested, Call back or Meeting booked with a note (and, if he gives it, who to email), one `claude-sonnet-5-5` call drafts a short follow-up in his voice (prompt: `agents/outreach-followup.md`). Code checks it (`src/outreach/followups.ts`). It is sent from the OWNER's mailbox (`OWNER_MAIL_ADDRESS`, `OWNER_GMAIL_OAUTH_REFRESH_TOKEN`; `npm run gmail-authorise -- --owner`), never the test mailbox, as `followup.send_email`: rung 2 (each needs his yes) until he switches it to rung 3 from the call list; 20 a day (`followups_per_day`), one per business per 24 hours. With no owner mailbox it is drafted and approved and the card offers a copy. Routes in `API.md`. Needs migration 0017.
+
 ## Kinds of business
 
 The Outreach room looks for several kinds of business (`business_types` in its settings): clinics, solicitors, financial advisers and mortgage brokers, estate and letting agents, accountants, and home improvement trades. Each has its own search phrases, groups, enquiry guidance, forbidden topics and leak assumptions (all placeholders until edited). Online shops are left out on purpose.
@@ -221,6 +225,7 @@ Plain SQL in `white-house/db/migrations/`, applied in name order, each once. A f
 | `src/outreach/pipeline.ts` | The prospecting pipeline, stage by stage |
 | `src/outreach/stages.ts` | The three single model calls and the code that checks their answers |
 | `src/outreach/calls.ts` | What happened on each call from the call list (append only); not interested suppresses |
+| `src/outreach/followups.ts` | The follow-up email after a call: facts for the model, the checks, the owner-mail connector, edit, Send, Don't send, the rung switch |
 | `src/outreach/store.ts` | The master list: dedupe, suppression, analysis, score, competitors, purge, numbers |
 | `src/outreach/score.ts`, `settings.ts`, `normalise.ts`, `extract.ts` | Filters and score, settings, dedupe keys, what code reads off a page |
 | `src/control/connectors/agent-reach.ts`, `companies-house.ts` | Search and page reading; the Companies House register |

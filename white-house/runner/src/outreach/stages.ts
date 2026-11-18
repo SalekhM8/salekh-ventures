@@ -455,6 +455,13 @@ export async function readReply(model: ModelCaller, apiKey: string, system: stri
   };
 }
 
+// ---- the follow-up email after a call (outreach/followups.ts) -------------------------
+
+export const followupSchema = z.object({
+  subject: z.string().describe("One short line, under 80 characters."),
+  body: z.string().describe('The whole email, from the greeting to the sign-off "Salekh Mahmood, Salekh Ventures" on its own last line.'),
+});
+
 /** Every schema sent to the API as a structured output, with the model that is sent it. `npm run check-schemas` tries each for real. */
 export const STAGE_SCHEMAS = {
   find: { schema: findSchema, model: "claude-haiku-5-5" },
@@ -462,4 +469,5 @@ export const STAGE_SCHEMAS = {
   enquiry: { schema: enquirySchema, model: "claude-haiku-5-5" },
   reply: { schema: replySchema, model: "claude-haiku-5-5" },
   draft: { schema: draftSchema, model: "claude-sonnet-5-5" },
+  followup: { schema: followupSchema, model: "claude-sonnet-5-5" },
 } as const;

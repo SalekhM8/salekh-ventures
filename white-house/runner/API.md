@@ -112,7 +112,55 @@ Every business in the room that has a shortlist card or any recorded call, newes
 
 `latest` is null when no call is recorded; `history` is newest first. **Personal data on purpose** (the notes), like the approvals and enquiries lists: do not cache or log it.
 
+> **Added 18 Nov 2026 (follow-up emails).** The outcome body may also carry `"followUpTo": { "name": "text, optional", "email": "address" }`, allowed only with `interested`, `call_back` or `meeting_booked`; an address that does not look like one answers 422 and nothing is recorded. After one of those three outcomes WITH a note, a follow-up email is drafted in the background (one model call, a few seconds): see the follow-up routes below. The answer is still `{ "ok": true }`. Without `followUpTo` the draft has no recipient: the system never takes an address from anywhere else.
+
 Each card in a Shortlist's Markdown carries its business's id on the line after its heading, as `<!-- prospect:<uuid> -->` (an HTML comment, not shown), and opens its profile with `- Estimated leak: £400 to £9,000 a month (estimate)` or `- Estimated leak: no figure (<why>)`. The output's `data.cards[]` has `prospect_id`, `estimated_leak` (`{ low, high, basis: "own_price" | "nearby_median" | "kind_median", workings }` or null) and `no_leak_reason`. Shortlists written before 18 Nov 2026 have neither line.
+
+## Follow-up emails after a call  (added 18 Nov 2026)
+
+A follow-up is sent, if at all, from the OWNER's mailbox (`OWNER_MAIL_*`, never the test mailbox) as the action `followup.send_email`: rung 2 (each needs a yes) unless the owner has chosen rung 3 (sent without asking), at most `followups_per_day` a day (seeded 20), never two to one business within 24 hours, never to a business that is suppressed or whose latest call says not interested, nothing while the kill switch is set. **Every route here returns or takes personal data on purpose** (who it is to and what it says): do not cache or log it. Nothing of it is in `/v1/house` or in any event; the house shows a count only, for example `"1 follow-up email waiting for your yes"`.
+
+### GET /v1/rooms/:roomId/followups
+
+The room's follow-ups, newest first: every one still open, and any other changed in the last 30 days. 404 for an unknown room.
+
+```json
+{
+  "followups": [ {
+    "id": "uuid", "prospectId": "uuid", "business": "name",
+    "status": "draft | waiting_for_you | approved | sending | sent | failed | not_sent",
+    "outcome": "interested | call_back | meeting_booked | null",
+    "to": { "name": "text or null", "email": "address" },
+    "subject": "text", "body": "text", "problems": ["what the checks found wrong"],
+    "payloadHash": "64 hex characters, or null without a recipient",
+    "createdAt": "ISO", "updatedAt": "ISO", "sentAt": "ISO or null", "from": "address it went from, or null",
+    "copiedAt": "ISO or null", "reason": "why it was not sent or is held, a fixed code, or null"
+  } ],
+  "rung": 2,
+  "ownerMailbox": { "configured": true, "address": "hello@... or null" },
+  "drafting": ["prospect ids being drafted for just now"]
+}
+```
+
+- `to` is null until Salekh gives a recipient; such a follow-up cannot be sent at any rung.
+- `draft`: not waiting for anyone (no recipient, a check failing, edited at rung 3, or a yes that ran out). `waiting_for_you`: waiting for a yes. `approved`: the yes is recorded and it has not gone, because no owner mailbox is connected (`reason: "no_mailbox"`: copy it and send it yourself) or the gateway held it back (`kill_switch`, `cap_exceeded`, ...; press Send again later). `failed`: the mail server was reached and the send failed: it may have gone, and it is not tried again. `not_sent`: `you_said_do_not_send`, `replaced_by_a_newer_draft`, `suppressed`, `not_interested`.
+- The checks, made on every draft and every edit: under 180 words, signed `Salekh Mahmood, Salekh Ventures` on the last line, no `£`, `$`, `€`, `%` or "per cent", no link, web address or email address in it, a recipient that is an email address. The model's own draft is also held to: no promise, no claim that it is already connected to their systems, ends with the ask for a 20-minute call this week, no number not in the facts, and the stored test result stated as stored.
+
+### POST /v1/followups/:id
+
+Body, any of: `{ "subject": "text", "body": "text", "to": { "name": "text?", "email": "address" } | null, "copied": true }`. Only while it is `draft`, `waiting_for_you` or `approved` (409 otherwise). The checks run again. **A change to the subject, the message or the address voids a yes, or the wait for one** (the approval becomes `voided`, reason `payload_changed`): it is a draft again, and at rung 2, if it passes, it is put to wait for a yes on what it now says, with a new `payloadHash`. An edit never sends anything, at any rung. `copied: true` notes that Salekh copied it to send himself (no change to what would be sent). Answers `{ "followup": { ... } }`; 422 for a bad field.
+
+### POST /v1/followups/:id/decision
+
+Body `{ "decision": "send" | "dont_send", "payloadHash": "the hash shown (needed with send)" }`. Answers 200 `{ "status": "...", "reason": "..."? }` with the follow-up's status afterwards, or 409 `{ "reason" }` when nothing could be done: `no_recipient`, `payload_mismatch` (it is not what was shown), `fails_checks`, `sent_in_the_last_24_hours`, `no_mailbox` (at rung 3, nothing to approve and nothing to send it with), `already_sent`, or a gateway refusal before any yes (`kill_switch`, `cap_exceeded`, ...). `send` on a draft puts it to the gateway and records the yes in one step; with no owner mailbox it ends at `{ "status": "approved", "reason": "no_mailbox" }` and nothing is sent. An answer given to a follow-up's approval through `POST /v1/approvals/:id` goes through this same code.
+
+### POST /v1/rooms/:roomId/followup-rung
+
+Body `{ "rung": 2 | 3, "reason": "text, optional" }`. The owner's switch: 2 "ask me first", 3 "send without asking". Recorded as a new version of the rung, in the owner's name, with the reason (a fixed one when none is given). Answers `{ "rung": n }`; 422 for anything else. At rung 3 a follow-up with a recipient is sent as soon as it is drafted, inside the cap and every check; without a recipient it waits. Follow-ups already waiting for a yes when the rung rises keep waiting: nobody approves them on Salekh's behalf.
+
+### POST /v1/prospects/:prospectId/followup
+
+Body `{ "note": "text, optional", "to": { "name"?, "email" }? }`. Draft a follow-up (again) now, in the background: 202 `{ "ok": true }`. The latest call must be `interested`, `call_back` or `meeting_booked` (409 `not_after_this_outcome` otherwise), and there must be a note, this one or that call's (422 otherwise). A new draft sets aside any follow-up for the same business that has not gone, withdrawing its yes.
 
 ## POST /v1/approvals/batch  (added 16 Nov 2026)
 

@@ -91,6 +91,7 @@ export async function makeHouse(h, opts = {}) {
     reach: opts.reach ?? null,
     sleep: opts.sleep,
     mailbox: opts.mailbox ?? null,
+    ownerMailbox: opts.ownerMailbox ?? null,
     places: opts.places ?? null,
     directReader: opts.directReader ?? null,
     role: opts.role,

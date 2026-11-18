@@ -97,6 +97,26 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.recordCallOutcome(b as string, body);
         return r.status === 200 ? send(res, 200, { ok: true }) : fail(r);
       }
+      case "GET rooms/:id/followups": {
+        const r = await rt.listFollowups(b as string);
+        return r.status === 200 ? send(res, 200, { followups: r.followups, rung: r.rung, ownerMailbox: r.ownerMailbox, drafting: r.drafting }) : fail(r);
+      }
+      case "POST rooms/:id/followup-rung": {
+        const r = await rt.setFollowupRung(b as string, body);
+        return r.status === 200 ? send(res, 200, { rung: r.rung }) : fail(r);
+      }
+      case "POST prospects/:id/followup": {
+        const r = await rt.requestFollowup(b as string, body);
+        return r.status === 200 ? send(res, 202, { ok: true }) : fail(r);
+      }
+      case "POST followups/:id": {
+        const r = await rt.editFollowup(b as string, body);
+        return r.status === 200 ? send(res, 200, { followup: r.followup }) : fail(r);
+      }
+      case "POST followups/:id/decision": {
+        const r = await rt.decideFollowup(b as string, body);
+        return r.status === 200 ? send(res, 200, r.result) : fail(r);
+      }
       case "POST approvals/:id": {
         // "batch" is not an id: several decisions in one request, each through the single path.
         if (b === "batch") {
