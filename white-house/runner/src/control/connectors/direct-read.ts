@@ -147,10 +147,13 @@ export function createDirectReader(options: DirectReadOptions = {}): DirectReade
       const left = deadline - Date.now();
       if (left <= 0) return reject(new DirectReadError("direct_timeout", "the site took too long"));
       let settled = false;
+      // Every stream this request makes, so that each can be torn down together and none is left to fail on its own.
+      const streams: { destroy(): unknown }[] = [];
       const fail = (err: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        for (const stream of streams) { try { stream.destroy(); } catch { /* already gone */ } }
         req.destroy();
         reject(err instanceof DirectReadError ? err : new DirectReadError("direct_failed", "the site could not be read"));
       };
@@ -161,19 +164,31 @@ export function createDirectReader(options: DirectReadOptions = {}): DirectReade
         const status = res.statusCode ?? 0;
         const type = String(res.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
         const encoding = String(res.headers["content-encoding"] ?? "").toLowerCase();
-        const stream = encoding === "gzip" ? res.pipe(zlib.createGunzip()) : encoding === "deflate" ? res.pipe(zlib.createInflate()) : encoding === "br" ? res.pipe(zlib.createBrotliDecompress()) : res;
-        const chunks: Buffer[] = [];
-        let size = 0;
+        const decoder = encoding === "gzip" ? zlib.createGunzip() : encoding === "deflate" ? zlib.createInflate() : encoding === "br" ? zlib.createBrotliDecompress() : null;
+        // EVERY STREAM HAS AN ERROR HANDLER FROM THE MOMENT IT EXISTS, before anything can flow through it, and keeps it
+        // after this request is settled. A body cut short, a broken gzip or a connection reset part way is an ordinary
+        // failure to read this one page. A stream error with nobody listening would stop the whole server.
+        streams.push(res);
+        res.on("error", fail);
+        res.on("aborted", () => fail(new DirectReadError("direct_failed", "the site cut the page short")));
+        if (decoder) {
+          streams.push(decoder);
+          decoder.on("error", () => fail(new DirectReadError("direct_failed", "the page's compressed body was broken or cut short")));
+        }
         // A page of the wrong kind is not downloaded. (A refusal or an error is read, briefly, to see whether it is a bot check.)
         if (status >= 200 && status < 300 && !accept.includes(type)) return fail(new DirectReadError("direct_not_text", "that address is not a web page"));
-        stream.on("data", (chunk: Buffer) => {
+        const body = decoder ? res.pipe(decoder) : res;
+        const chunks: Buffer[] = [];
+        let size = 0;
+        body.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > maxBytes) return fail(new DirectReadError("direct_too_large", "the page is too large"));
           chunks.push(chunk);
         });
-        stream.on("error", fail);
-        stream.on("end", () => {
+        body.on("end", () => {
           if (settled) return;
+          // The connection closing before the whole body arrived is not an end.
+          if (!res.complete) return fail(new DirectReadError("direct_failed", "the site cut the page short"));
           settled = true;
           clearTimeout(timer);
           resolve({ status, headers: res.headers, type, body: Buffer.concat(chunks).toString("utf8") });

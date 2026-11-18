@@ -8,7 +8,7 @@ import { isUniqueViolation, lock, type Db, type Tx } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import type { Gateway } from "../control/gateway.js";
 import { finishRun, startRun, tenantDay } from "../control/runs.js";
-import { asksNotToBeContacted, captureFor, estimateLeak, isAutomatic, isBounce, lintEnquiry, readsAsComplaint, sentOutOfHours, SLOTS, usefulOutOfHours, type Slot, type Capture, type EnquiryDraft, type Leak, type StoredReply, type TestResult } from "./enquiry-rules.js";
+import { asksNotToBeContacted, captureFor, estimateLeak, isAutomatic, isBounce, lintEnquiry, ownWords, readsAsComplaint, saysOnlyToCall, saysToCall, sentenceToCall, sentOutOfHours, SLOTS, usefulOutOfHours, type Slot, type Capture, type EnquiryDraft, type Leak, type StoredReply, type TestResult } from "./enquiry-rules.js";
 export type { StoredReply, TestResult } from "./enquiry-rules.js";
 import { companyNumberKey, domainKey } from "./normalise.js";
 import { applyFilters, isGroup, scoreProspect, type Scorable } from "./score.js";
@@ -286,7 +286,7 @@ export interface ReplyCounts {
   optedOut: number;
   /** Notices that an enquiry could not be delivered. */
   bounced: number;
-  /** Replies that read as a complaint about being contacted. Each one stops automatic sending for the day. */
+  /** Replies that read as a complaint about being contacted. Each suppresses its business; only several in a day stop sending. */
   complaints: number;
 }
 
@@ -310,6 +310,7 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
     )).rows);
   const totals: Record<string, StageTotals> = {};
   const runs: Record<string, string | null> = {};
+  const complainedFor: string[] = [];
 
   for (const e of open) {
     counts.enquiriesChecked += 1;
@@ -334,7 +335,9 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
     for (const mail of fresh) {
       const stored: StoredReply = { message_id: mail.messageId, received_at: mail.receivedAt.toISOString(), kind: "unclear", matched_by: mail.matchedBy, text: mail.text.slice(0, 6000) };
       const machine = isAutomatic(mail.headers, mail.subject);
-      let optOut = asksNotToBeContacted(mail.text);
+      // Only the reply's own words are judged: not what it quotes, not the signature, not the firm's standard footer.
+      const own = ownWords(mail.text);
+      let optOut = machine !== true && asksNotToBeContacted(own);
       // Could not be delivered: the business never saw it. Not a reply, not a result, and one more towards the day's limit of failures.
       if (isBounce(mail.from, mail.subject)) {
         stored.kind = "bounce";
@@ -343,7 +346,10 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
         result.replies.push(stored);
         continue;
       }
-      let complaint = machine !== true && readsAsComplaint(mail.text);
+      // A complaint needs BOTH: a phrase in the reply's own words (here), and the reply reader agreeing with a sentence
+      // that is really in those words (below). Either alone stops nothing.
+      const complaintPhrase = machine !== true && readsAsComplaint(own);
+      let complaint: string | null = null;
       if (machine === true) stored.kind = "automatic";
       if (ctx.model && ctx.apiKey) {
         // One cheap call reads the reply: is it from a person (when the headers do not settle it), did it answer the
@@ -356,28 +362,32 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
           totals[business] = noTotals();
         }
         if (runs[business]) {
-          const { reply, reading } = await readReply(ctx.model, ctx.apiKey, ctx.system, `${e.subject}\n\n${e.body}`, mail.text);
+          const { reply, reading } = await readReply(ctx.model, ctx.apiKey, ctx.system, `${e.subject}\n\n${e.body}`, own || mail.text);
           addTo(totals[business] as StageTotals, reply);
           if (reading) {
             // The headers have the last word on whether a machine sent it.
             if (machine !== true) stored.kind = reading.fromAPerson ? "person" : "automatic";
             stored.answered = reading.answered;
-            stored.next_step = reading.nextStep;
-            if (machine !== true) {
-              optOut = optOut || reading.asksNotToBeContacted;
-              complaint = complaint || reading.asksNotToBeContacted;
-            }
+            // "Please call the office" is a refusal to answer by email, not a next step. It is kept, and quoted on the card.
+            const callOnly = reading.nextStep?.value === true && saysOnlyToCall(reading.nextStep.quote ?? "");
+            stored.next_step = callOnly ? { value: false, quote: null } : reading.nextStep;
+            if (machine !== true && reading.answered?.value !== true && saysToCall(own)) stored.told_to_call = sentenceToCall(own);
+            if (complaintPhrase && reading.complaint?.value === true && reading.complaint.quote) complaint = reading.complaint.quote;
           }
         }
       }
       if (stored.kind === "person") counts.person += 1;
       if (stored.kind === "automatic") counts.automatic += 1;
       result.replies.push(stored);
+      if (optOut || complaint) stored.opt_out = true;
       if (complaint) {
-        // Somebody minds being contacted. Automatic sending stops for the day, and this business is never written to again.
+        // Somebody minds being contacted. This business is never written to again, and the sentence is kept so the owner
+        // can see it. One complaint does NOT stop sending (owner's decision, 18 Nov 2026): only several in a day do,
+        // which would mean something is wrong with the enquiries themselves. Counted after this reply is stored.
+        stored.complaint_sentence = complaint.slice(0, 300);
         counts.complaints += 1;
         optOut = true;
-        await tripBreaker(ctx.db, ctx.tenantId, e.business_id as string, "complaint", ctx.now());
+        complainedFor.push(e.business_id as string);
       }
       if (optOut && !result.opted_out) {
         result.opted_out = true;
@@ -398,6 +408,8 @@ export async function collectReplies(ctx: ReplyContext): Promise<ReplyCounts> {
     }
     await ctx.db.tx(ctx.tenantId, (tx) => tx.query("update prospects set test_result = $2::jsonb where prospect_id = $1", [e.prospect_id, JSON.stringify(result)]));
   }
+  // Several complaints in one day stop sending; one never does.
+  if (complainedFor[0]) await checkComplaints(ctx.db, ctx.tenantId, complainedFor[0], ctx.now());
   // Bounces count with failed sends towards the day's limit.
   if (counts.bounced > 0 && open[0]) await checkFailures(ctx.db, ctx.tenantId, open[0].business_id as string, ctx.maxFailuresADay ?? 3, ctx.now());
   for (const [business, runId] of Object.entries(runs)) {
@@ -440,7 +452,11 @@ export async function scoreTested(
       `select ${columns.split(", ").map((c) => `p.${c}`).join(", ")}, p.stage, p.test_result, e.subject as enquiry_subject, e.body as enquiry_body, e.to_address as enquiry_to
          from prospects p join enquiries e on e.prospect_id = p.prospect_id and e.status = 'sent'
         where p.business_id = $1 and coalesce((p.test_result ->> 'score_after')::timestamptz, e.sent_at + ($3 * interval '1 hour')) <= $2 and p.purged_at is null
-          and ((p.stage = 'analysed' and p.capture_score is null) or p.stage = 'tested')
+          and ((p.stage = 'analysed' and p.capture_score is null) or p.stage = 'tested'
+               -- Owner's decision, 18 Nov 2026: everyone tested is shown, worst first, and Salekh decides. Businesses set
+               -- aside AFTER their test by the old rules (company type, money signal, leak estimate, answered well) come back.
+               or (p.stage = 'filtered_out' and p.capture_score is not null and p.card is null
+                   and p.filter_reason in ('limited_company_not_confirmed', 'no_money_signal', 'estimated_leak_below_threshold', 'captures_well', 'no_named_contact')))
         order by e.sent_at, p.prospect_id`,
       [scope.businessId, now, settings.reply_wait_hours],
     );
@@ -480,6 +496,9 @@ export async function scoreTested(
           [p.prospectId, capture.score, JSON.stringify(capture), fit.score, JSON.stringify(fit.breakdown)],
         );
         await event("tested", "scored");
+      } else if (raw.stage === "filtered_out") {
+        await tx.query("update prospects set stage = 'tested', filter_reason = null, filtered_out_at = null where prospect_id = $1", [p.prospectId]);
+        await event("tested", "restored_owner_shows_everyone");
       }
       const people = test.replies.filter((r) => r.kind === "person").sort((a, b) => a.received_at.localeCompare(b.received_at));
       const minutesToReply = people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null;
@@ -489,12 +508,12 @@ export async function scoreTested(
       const verdict = test.opted_out ? { keep: false as const, reason: "opted_out" }
         // The enquiry never reached them, so their silence says nothing about how they answer.
         : test.replies.some((r) => r.kind === "bounce") ? { keep: false as const, reason: "enquiry_bounced" }
-        : applyFilters(scorable, untested);
-      const reason = !verdict.keep ? verdict.reason
-        : capture.score !== null && capture.score > settings.capture_threshold ? "captures_well"
-        // Only when an estimate exists. With none, the business is judged on capture and fit alone.
-        : leak.estimated && leak.high < settings.min_estimated_leak ? "estimated_leak_below_threshold"
-        : null;
+        : { keep: true as const };
+      // Owner's decision, 18 Nov 2026: no cut-off and no filter after the test. Everyone tested goes on the list,
+      // worst first, with the score and what happened; Salekh decides who to call. Only a business that asked not to be
+      // contacted, or that the enquiry never reached, is left off. (The fit score and leak estimate are still shown.)
+      void untested; void applyFilters;
+      const reason = !verdict.keep ? verdict.reason : null;
       if (reason) {
         // Kept on the list with its result: it is the comparison for its neighbours. Details are purged after 90 days like any other.
         await tx.query("update prospects set stage = 'filtered_out', filter_reason = $2, filtered_out_at = $3, purge_after = $4 where prospect_id = $1",
@@ -532,7 +551,7 @@ export type BreakerReason = "send_failures" | "complaint" | "mailbox_login" | "m
 const BREAKER: Record<BreakerReason, string> = {
   mail_unreachable: "the mail server could not be reached from this server",
   send_failures: "too many enquiries failed to send or bounced today",
-  complaint: "a reply read as a complaint about being contacted",
+  complaint: "several replies today read as complaints about being contacted",
   mailbox_login: "the test mailbox refused the login",
 };
 
@@ -565,8 +584,9 @@ async function breakerIn(tx: Tx, now: Date): Promise<string | null> {
     [now],
   )).rows;
   // The latest word stands: a stop after a reset is a stop, and a reset after a stop lifts it. The first stop since then gives the reason.
-  const since = row.findIndex((r) => r.reason_code === "enquiry_breaker_reset");
-  const stops = (since === -1 ? row : row.slice(0, since)).filter((r) => r.reason_code !== "enquiry_breaker_reset");
+  const isReset = (r: { reason_code: string }) => r.reason_code.startsWith("enquiry_breaker_reset");
+  const since = row.findIndex(isReset);
+  const stops = (since === -1 ? row : row.slice(0, since)).filter((r) => !isReset(r));
   const first = stops.at(-1);
   return first ? String(first.summary).replace(/^Sending stopped for today: /, "") : null;
 }
@@ -574,6 +594,30 @@ async function breakerIn(tx: Tx, now: Date): Promise<string | null> {
 /** Why sending is stopped today, in plain words, or null when it is not. */
 export function breakerToday(db: Db, tenantId: string, now: Date): Promise<string | null> {
   return db.tx(tenantId, (tx) => breakerIn(tx, now));
+}
+
+/** Complaints that stop sending for the day: this many confirmed in one day, or more than this share of the day's
+ * sent enquiries once at least COMPLAINT_MIN_SENT have gone. One complaint alone never stops sending: it only
+ * suppresses that business (owner's decision, 18 Nov 2026). */
+export const COMPLAINTS_A_DAY = 3;
+export const COMPLAINT_SHARE = 0.1;
+export const COMPLAINT_MIN_SENT = 20;
+
+/** Confirmed complaints and sent enquiries today. Past either limit, sending stops. Returns true when it has just been stopped. */
+export async function checkComplaints(db: Db, tenantId: string, businessId: string, now: Date): Promise<boolean> {
+  const row = await db.tx(tenantId, async (tx) => (await tx.query(
+    `select (select count(*) from prospects p join tenants t on t.tenant_id = p.tenant_id, jsonb_array_elements(coalesce(p.test_result -> 'replies', '[]'::jsonb)) r
+              where r ? 'complaint_sentence' and ((r ->> 'received_at')::timestamptz at time zone t.timezone)::date = (($1::timestamptz) at time zone t.timezone)::date) as complaints,
+            (select count(*) from enquiries e join tenants t on t.tenant_id = e.tenant_id
+              where e.sent_at is not null and (e.sent_at at time zone t.timezone)::date = (($1::timestamptz) at time zone t.timezone)::date) as sent`,
+    [now],
+  )).rows[0]);
+  const complaints = Number(row.complaints);
+  const sent = Number(row.sent);
+  const tooMany = complaints >= COMPLAINTS_A_DAY || (sent >= COMPLAINT_MIN_SENT && complaints / sent > COMPLAINT_SHARE);
+  if (!tooMany) return false;
+  await tripBreaker(db, tenantId, businessId, "complaint", now);
+  return true;
 }
 
 /** Failed sends and bounces today. Past the day's limit, sending stops. Returns true when it has just been stopped, or already was. */
@@ -742,4 +786,133 @@ export async function requeueUnsent(db: Db, tenantId: string, since: Date, now: 
     if (await breakerToday(db, tenantId, now)) await resetBreaker(db, tenantId, businessId, now);
   }
   return rows.length;
+}
+
+// ---- what came back, to read afterwards -------------------------------------------------
+
+export interface ReplyRecord {
+  business: string;
+  kind: string;
+  receivedAt: string;
+  /** person, automatic, unclear or bounce. */
+  from: StoredReply["kind"];
+  /** A person, or an automatic reply that answered the question or offered a booking. */
+  useful: boolean;
+  flags: { answered: boolean | null; offeredNextStep: boolean | null; askedNotToBeContacted: boolean; complaint: boolean; matchedBy: string };
+  /** The sentence that was read as a complaint, when one was. */
+  complaintSentence: string | null;
+  /** The reply's own words: quoted text, signature and footer taken off. */
+  text: string;
+}
+
+/** Replies received in one room since a moment, newest first. PERSONAL DATA: what people at these businesses wrote. */
+export async function listReplies(db: Db, tenantId: string, businessId: string, since: Date, limit = 500): Promise<ReplyRecord[]> {
+  const rows = await db.tx(tenantId, async (tx) => (await tx.query(
+    "select name, business_type, test_result from prospects where business_id = $1 and purged_at is null and test_result is not null and jsonb_array_length(coalesce(test_result -> 'replies', '[]'::jsonb)) > 0",
+    [businessId],
+  )).rows);
+  const out: ReplyRecord[] = [];
+  for (const row of rows) {
+    for (const r of (row.test_result as TestResult).replies) {
+      if (new Date(r.received_at).getTime() < since.getTime()) continue;
+      out.push({
+        business: row.name as string, kind: row.business_type as string, receivedAt: r.received_at, from: r.kind,
+        useful: r.kind === "person" || (r.kind === "automatic" && (r.answered?.value === true || r.next_step?.value === true)),
+        flags: { answered: r.answered?.value ?? null, offeredNextStep: r.next_step?.value ?? null, askedNotToBeContacted: r.opt_out === true, complaint: typeof r.complaint_sentence === "string", matchedBy: r.matched_by },
+        complaintSentence: r.complaint_sentence ?? null, text: ownWords(r.text),
+      });
+    }
+  }
+  return out.sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0, limit);
+}
+
+/** The complaints behind today's stop, for the owner to judge: which business, and the sentence. */
+export async function complaintsToday(db: Db, scope: ProspectScope, now: Date): Promise<{ business: string; sentence: string }[]> {
+  const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  return (await listReplies(db, scope.tenantId, scope.businessId, since)).filter((r) => r.complaintSentence).map((r) => ({ business: r.business, sentence: r.complaintSentence as string }));
+}
+
+/**
+ * The owner's switch: lift a stop on sending for one day. Does nothing unless that day is today (a stop does not
+ * outlast its day anyway), sending is stopped, and the owner has not already lifted a stop today: once.
+ */
+export async function clearStop(db: Db, tenantId: string, day: string, now: Date): Promise<boolean> {
+  return db.tx(tenantId, async (tx) => {
+    await lock(tx, "enquiry-breaker", tenantId);
+    // Lifts the stop in force now, once: a stop that is already lifted is not lifted again. A NEW stop later the same
+    // day can be lifted too (owner's decision, 18 Nov 2026: a wrong stop must not cost the rest of the day). A real
+    // fault, such as a refused login, simply stops sending again on its next attempt.
+    if ((await tenantDay(tx, now)) !== day || !(await breakerIn(tx, now))) return false;
+    const floor = (await tx.query("select business_id from events where type = 'stage' and reason_code like 'enquiry\\_breaker\\_%' and business_id is not null order by seq desc limit 1")).rows[0];
+    await emitEvent(tx, { tenantId, businessId: floor?.business_id ?? null, department: DEPARTMENT, type: "stage", reasonCode: "enquiry_breaker_reset_owner", summary: "The stop on sending was lifted by the owner, through the server's settings", now });
+    return true;
+  });
+}
+
+// ---- scoring whatever is due, from a run or from the ten minute round ---------------------
+
+/**
+ * Score every business whose enquiry's wait has ended. First, for those that scored low and whose company is not
+ * confirmed, Companies House is asked (a limited company, and a director's name): only now, after the test.
+ * Code only apart from that lookup, so it is safe to do every ten minutes.
+ */
+export async function scoreDue(
+  db: Db, scope: ProspectScope, settings: OutreachSettings, now: Date,
+  companiesHouse: { lookup(input: { number: string | null; name: string; postcode: string | null }): Promise<any> } | null,
+  store: {
+    toRow: (r: any) => ProspectRow; columns: string;
+    awaitingCompanyCheck: (db: Db, scope: ProspectScope, now: Date, waitHours: number) => Promise<(ProspectRow & { testResult: unknown; companyNumber: string | null })[]>;
+    saveCompanyCheck: (db: Db, scope: ProspectScope, prospectId: string, result: any) => Promise<void>;
+  },
+): Promise<Awaited<ReturnType<typeof scoreTested>> & { companyCheckFailed: number }> {
+  let companyCheckFailed = 0;
+  if (companiesHouse) {
+    const timezone = (await db.tx(scope.tenantId, async (tx) => (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone)) as string;
+    for (const p of await store.awaitingCompanyCheck(db, scope, now, settings.reply_wait_hours)) {
+      const capture = captureFor(p.testResult as TestResult, [...new Set(p.routes.map((r) => r.kind))], forType(settings, p.typeId), timezone);
+      // Everyone tested is shown now (owner's decision, 18 Nov 2026), so everyone gets the director's name looked up.
+      void capture;
+      const result = await companiesHouse.lookup({ number: p.companyNumber, name: p.name, postcode: p.postcode }).catch(() => null);
+      if (result) await store.saveCompanyCheck(db, scope, p.prospectId, result);
+      else companyCheckFailed += 1;
+    }
+  }
+  return { ...(await scoreTested(db, scope, settings, now, store.toRow, store.columns)), companyCheckFailed };
+}
+
+export interface ResultSoFar {
+  prospectId: string;
+  name: string;
+  kind: string;
+  captureScore: number | null;
+  /** "prospect": scored low and passed the filters. Otherwise why it was set aside. */
+  outcome: string;
+  note: string;
+  sentAt: string;
+  slot: string | null;
+  openingState: string | null;
+}
+
+/** Every business scored on the tenant's day so far, for the room's rolling "Results so far". */
+export async function resultsToday(db: Db, scope: ProspectScope, now: Date): Promise<{ day: string; results: ResultSoFar[] }> {
+  return db.tx(scope.tenantId, async (tx) => {
+    const day = await tenantDay(tx, now);
+    const rows = (await tx.query(
+      `select p.prospect_id, p.name, p.business_type, p.capture_score, p.capture_breakdown, p.stage, p.filter_reason, p.test_result
+         from prospects p join tenants t on t.tenant_id = p.tenant_id
+        where p.business_id = $1 and p.purged_at is null and p.capture_score is not null
+          and exists (select 1 from prospect_events e where e.prospect_id = p.prospect_id and e.stage = 'tested' and (e.created_at at time zone t.timezone)::date = $2::date)
+        order by p.capture_score, p.name`,
+      [scope.businessId, day],
+    )).rows;
+    return {
+      day,
+      results: rows.map((r) => ({
+        prospectId: r.prospect_id, name: r.name, kind: r.business_type, captureScore: r.capture_score === null ? null : Number(r.capture_score),
+        outcome: r.stage === "filtered_out" ? (r.filter_reason as string) : "prospect",
+        note: String((r.capture_breakdown as Capture | null)?.parts?.[0]?.note ?? ""),
+        sentAt: (r.test_result as TestResult).sent_at, slot: (r.test_result as TestResult).slot ?? null, openingState: (r.test_result as TestResult).opening_state ?? null,
+      })),
+    };
+  });
 }

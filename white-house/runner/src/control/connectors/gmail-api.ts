@@ -25,6 +25,17 @@ import { isConnectionFailure, MailboxLoginError, MailboxUnreachableError, networ
 export const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"] as const;
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
+/** At least this long between two Gmail calls, so a round over many enquiries stays under Google's per-second quota. */
+const MIN_GAP_MS = 120;
+/** Google's reason codes that mean "too many calls", as opposed to "not allowed". */
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded", "quotaExceeded"]);
+
+async function reasonsOf(res: Response): Promise<string[]> {
+  const body = (await res.json().catch(() => null)) as { error?: { errors?: { reason?: unknown }[]; status?: unknown } } | null;
+  const reasons = (body?.error?.errors ?? []).map((e) => String(e.reason ?? ""));
+  if (body?.error?.status === "RESOURCE_EXHAUSTED") reasons.push("rateLimitExceeded");
+  return reasons;
+}
 const AUTO_HEADERS = ["auto-submitted", "x-autoreply", "x-autorespond", "x-auto-response-suppress", "precedence"];
 
 export interface GmailApiOptions {
@@ -81,8 +92,23 @@ export function createGmailApiMailbox(options: GmailApiOptions): Mailbox {
     return token.value;
   }
 
+  // Gmail allows a burst of calls and then answers 403 or 429 "rate limit". That is not a refused login: it is
+  // "slow down", and must never stop sending for the day. Calls are paced, and a rate limit is a passing failure.
+  let lastCall = 0;
+  const pace = async () => {
+    const wait = lastCall + MIN_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastCall = Date.now();
+  };
+
   async function api(path: string, init: RequestInit = {}): Promise<any> {
+    await pace();
     const res = await reach(`${API}${path}`, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${await accessToken()}` } });
+    if (res.status === 429 || res.status === 403) {
+      // Only the reason codes are read from Google's answer: its message can quote the mailbox.
+      const reasons = res.status === 429 ? ["rateLimitExceeded"] : await reasonsOf(res);
+      if (reasons.some((r) => RATE_LIMIT_REASONS.has(r))) throw Object.assign(new ControlError("mailbox_failed", "Gmail asked for fewer calls"), { networkCode: "RATE_LIMITED" });
+    }
     if (res.status === 401 || res.status === 403) { token = null; throw new MailboxLoginError(); }
     // The API's own words are not passed on: they can quote a mailbox's contents.
     if (!res.ok) throw Object.assign(new ControlError("mailbox_failed", "the Gmail API refused the call"), { networkCode: `HTTP_${res.status}` });

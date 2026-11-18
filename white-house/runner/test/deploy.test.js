@@ -103,14 +103,14 @@ test("bootstrap: two instances starting together set the database up once; a sec
   // ---- the first boot, by two instances at the same moment ----
   const [one, two] = await Promise.all([boot({ carried: parseCarriedConfig(encode(blob())) }), boot({ carried: parseCarriedConfig(encode(blob())) })]);
   assert.deepEqual([one.tenantId, two.tenantId], [TENANT, TENANT], "the tenant has the id that was given, so it matches the developer's machine");
-  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [14, 1], "each migration applied once; one of the two was the first boot");
+  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [15, 1], "each migration applied once; one of the two was the first boot");
   assert.deepEqual(one.roles, [`${PREFIX}_agent`, `${PREFIX}_gateway`, `${PREFIX}_ui`]);
   const counts = async () => (await bootRows(
     `select (select count(*)::int from tenants) as tenants, (select count(*)::int from businesses) as floors, (select count(*)::int from members) as members,
             (select count(*)::int from config_versions) as config, (select count(*)::int from suppressions) as suppressions, (select count(*)::int from schema_migrations) as migrations,
             (select count(*)::int from prospects) as prospects, (select count(*)::int from approvals) as approvals`))[0];
   const first = await counts();
-  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 14, 0, 0]);
+  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 15, 0, 0]);
   assert.deepEqual(await bootRows("select slug, timezone from tenants"), [{ slug: "fixture-boot", timezone: "Europe/London" }]);
 
   // what was carried is in force, as version 1, and says where it came from
@@ -361,6 +361,46 @@ test("export-config: the configuration in force and the suppressions of business
   // it is exactly what the bootstrap accepts (the test world's own dummy action aside, which the real runner does not have)
   const forServer = { ...out, config: out.config.filter((c) => !(c.kind === "rung" && c.key.startsWith("dummy."))) };
   assert.equal(parseCarriedConfig(encode(forServer)).config.length, forServer.config.length);
+});
+
+// ---- a restart in the middle of a run ----
+
+test("a run left running by a process that died is closed at start as interrupted, the room is no longer stuck, and a pipeline run is started again once", async () => {
+  const x = await makeHouse(h, { outreach: { budget: 5 }, server: true });
+  open.push(x);
+  const begin = (department, trigger) => control.startRun(h.gatewayDb, { tenantId: x.w.tenantId, businessId: x.w.businessId, department, trigger, model: "claude-haiku-5-5" }, { now: x.w.clock.now() });
+  // as the dead process left it: an outreach run part way through analysing, and a Data run
+  const outreach = await begin("outreach", "outreach:analyse");
+  const data = await begin("data", "requested");
+  await h.gatewayDb.tx(x.w.tenantId, (tx) => control.emitEvent(tx, { tenantId: x.w.tenantId, businessId: x.w.businessId, department: "outreach", runId: outreach.runId, type: "stage", summary: "Analysing 31 of 47", reasonCode: "analyse", now: x.w.clock.now() }));
+  const [waiting] = await rows(h, "insert into prospects (tenant_id, business_id, name, domain_key) values ($1, $2, 'Fixture Midway Dental', 'fixture-midway.example.test') returning prospect_id", [x.w.tenantId, x.w.businessId]);
+  x.w.clock.advance(1000);
+  assert.deepEqual([(await x.roomOf("fixture-floor-one:outreach")).state, (await x.roomOf("fixture-floor-one:outreach")).task], ["working", "Analysing 31 of 47"], "stuck, as it was on the server");
+
+  const cut = await x.runtime.closeInterrupted();
+  assert.deepEqual(cut, { closed: 2, restart: ["fixture-floor-one:outreach"] }, "both are closed; only the pipeline run is one to start again");
+  assert.deepEqual((await rows(h, "select department, status, error, ended_at is not null as ended from runs where tenant_id = $1 order by department", [x.w.tenantId])).map((r) => [r.department, r.status, r.error, r.ended]),
+    [["data", "failed", "interrupted_by_restart", true], ["outreach", "failed", "interrupted_by_restart", true]]);
+  const events = await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId });
+  assert.deepEqual(events.filter((e) => e.reasonCode === "interrupted_by_restart").map((e) => [e.type, e.summary]), Array(2).fill(["failed", "The run was cut off by a restart of the server and has been closed"]));
+  x.w.clock.advance(1000);
+  assert.notEqual((await x.roomOf("fixture-floor-one:outreach")).state, "working");
+  // the business that was mid-analysis is still to be analysed, with nothing held against it
+  assert.deepEqual((await rows(h, "select stage, analysis_attempts from prospects where prospect_id = $1", [waiting.prospect_id]))[0], { stage: "found", analysis_attempts: 0 });
+  // nothing is running now: a second call does nothing, and the room can be started again
+  assert.deepEqual(await x.runtime.closeInterrupted(), { closed: 0, restart: [] });
+  // it falls over again the same day: the run is closed, but it is not started a second time (no loop)
+  await begin("outreach", "outreach:find");
+  assert.deepEqual(await x.runtime.closeInterrupted(), { closed: 1, restart: [] });
+  // the next day it would be
+  x.w.clock.advance(24 * 60 * 60 * 1000);
+  await begin("outreach", "outreach:find");
+  assert.deepEqual(await x.runtime.closeInterrupted(), { closed: 1, restart: ["fixture-floor-one:outreach"] });
+  // a standby touches nothing
+  const idle = await makeHouse(h, { outreach: { budget: 5 }, role: "standby", server: false });
+  open.push(idle);
+  await control.startRun(h.gatewayDb, { tenantId: idle.w.tenantId, businessId: idle.w.businessId, department: "outreach", trigger: "outreach:find", model: "claude-haiku-5-5" }, { now: idle.w.clock.now() });
+  assert.deepEqual(await idle.runtime.closeInterrupted(), { closed: 0, restart: [] });
 });
 
 // ---- one mailbox, one owner ----

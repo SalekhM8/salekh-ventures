@@ -17,9 +17,9 @@ import type { Mailbox } from "../control/connectors/mailbox.js";
 import type { Place, PlacesConnector, PlacesSearch } from "../control/connectors/places.js";
 import { PLACES_PRICE_TIERS } from "../control/connectors/places.js";
 import type { Gateway } from "../control/gateway.js";
-import { allowanceLeft, breakerToday, collectReplies, emailFor, ENQUIRY_ACTION, enquiryCounts, notTestableReason, proposeEnquiry, requeueAfterRungChange, scoreTested, sentWithoutAsking, syncDecisions, type ReplyCounts, type TestedProspect } from "./enquiries.js";
+import { allowanceLeft, breakerToday, collectReplies, complaintsToday, scoreDue, type ResultSoFar, emailFor, ENQUIRY_ACTION, enquiryCounts, notTestableReason, proposeEnquiry, requeueAfterRungChange, scoreTested, sentWithoutAsking, syncDecisions, type ReplyCounts, type TestedProspect } from "./enquiries.js";
 import { readRung } from "../control/config.js";
-import { captureFor, estimateLeak, openAt, sayMinutes, sentOutOfHours, serviceFor, SLOT_NAME, usefulOutOfHours, type Slot, type TestResult } from "./enquiry-rules.js";
+import { captureFor, estimateLeak, openAt, ownWords, sayMinutes, sentOutOfHours, serviceFor, SLOT_NAME, usefulOutOfHours, type Slot, type TestResult } from "./enquiry-rules.js";
 import { bestRoute, leadAgentFor, namedGroup } from "./score.js";
 import { enabledTypes, forType, SIGNAL_MEANING, type OutreachSettings, type Signal } from "./settings.js";
 import { addInto, addTo, analyseBusiness, classifyLeads, draftCard, draftEnquiry, factsFor, noTotals, type Lead, type StageTotals } from "./stages.js";
@@ -151,6 +151,9 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   let replyCounts: ReplyCounts | null = null;
   const fetches: FetchCounts = { fetched: 0, fromCache: 0 };
   const notes: string[] = [];
+  /** What each kind of business came to on this run, so a kind that produces nothing is seen. */
+  const byKind: Record<string, { found: number; analysed: number; testable: number; queued: number }> = {};
+  const kindTally = (typeId: string) => (byKind[typeId] ??= { found: 0, analysed: 0, testable: 0, queued: 0 });
   let companyCheckFailed = 0;
   let lastRunId = ctx.firstRunId;
   let areasCovered: string[] = [];
@@ -250,20 +253,11 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   // Second: score every business whose enquiry is old enough. Code only, so it is done before anything that can be limited or stopped.
   let scoredNow: Awaited<ReturnType<typeof scoreTested>> = { scored: 0, filtered: {}, passed: [] };
   if (testing) {
-    // Companies House is asked only now, after the test, and only about businesses that scored low: is this a
-    // limited company, and who is a director. Nothing about a company or a name stopped the test itself.
-    if (ctx.companiesHouse) {
-      const timezone = (await db.tx(tenantId, async (tx) => (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone)) as string;
-      const waitingOn = await awaitingCompanyCheck(db, scope(lastRunId), clock(), settings.reply_wait_hours);
-      for (const p of waitingOn) {
-        const capture = captureFor(p.testResult as TestResult, [...new Set(p.routes.map((r) => r.kind))], forType(settings, p.typeId), timezone);
-        if (capture.score !== null && capture.score > settings.capture_threshold) continue;
-        const result = await ctx.companiesHouse.lookup({ number: p.companyNumber, name: p.name, postcode: p.postcode }).catch(() => null);
-        if (result) await saveCompanyCheck(db, scope(lastRunId), p.prospectId, result);
-        else companyCheckFailed += 1;
-      }
-    }
-    scoredNow = await scoreTested(db, scope(lastRunId), settings, clock(), toProspectRow, PROSPECT_COLUMNS);
+    // Whatever is due is scored here, as it is on the ten minute round between runs. Companies House is asked only
+    // now, after the test, and only about businesses that scored low.
+    const due = await scoreDue(db, scope(lastRunId), settings, clock(), ctx.companiesHouse, { toRow: toProspectRow, columns: PROSPECT_COLUMNS, awaitingCompanyCheck, saveCompanyCheck });
+    scoredNow = due;
+    companyCheckFailed += due.companyCheckFailed;
     for (const [reason, n] of Object.entries(scoredNow.filtered)) tally.filtered_out[reason] = (tally.filtered_out[reason] ?? 0) + n;
     tally.scored_after_test = scoredNow.scored;
   }
@@ -320,6 +314,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
       return false;
     }
     tally.found += 1;
+    kindTally(typeId).found += 1;
     const setAside = async (reason: string) => {
       await rejectProspect(db, scope(runId), result.prospectId, reason, clock());
       tally.filtered_out[reason] = (tally.filtered_out[reason] ?? 0) + 1;
@@ -382,6 +377,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
         const stored = await recordAnalysis(db, scope(runId), prospect.prospectId, analysed.analysis, { now: clock(), companiesHouse: ctx.companiesHouse });
         if (!stored.ok) throw new Error("the analysis was not accepted");
         tally.analysed += 1;
+        kindTally(prospect.typeId).analysed += 1;
       } catch (err) {
         const code = String((err as { code?: unknown } | null)?.code ?? "");
         if (code === "direct_disallowed" || code === "direct_blocked") {
@@ -411,7 +407,14 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   // ---- backlog first --------------------------------------------------------
   // Businesses found on earlier runs and never analysed come before any new finding.
   let looked = 0;
-  const backlog = await listForAnalysis(db, scope(null), settings.find_per_run);
+  // THE BATCH IS SHARED BETWEEN THE KINDS, THE BACKLOG INCLUDED. Each kind switched on has an equal share of the run. A
+  // kind's backlog is drawn from its own share and no further, so a long backlog of one kind cannot use up the batch
+  // and leave the others never looked for.
+  const kindsOn = enabledTypes(settings).map((t) => t.id);
+  const kindShare = Math.max(1, Math.floor(settings.find_per_run / Math.max(1, kindsOn.length)));
+  const backlog = await listForAnalysis(db, scope(null), settings.find_per_run, kindShare);
+  const backlogOf = new Map<string, number>();
+  for (const p of backlog) backlogOf.set(p.typeId, (backlogOf.get(p.typeId) ?? 0) + 1);
   if (backlog.length > 0) {
     let runId: string | Stopped = ctx.firstRunId;
     if (ctx.firstStage === "analyse") firstRunOpen = false;
@@ -560,6 +563,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
           }, { now: clock(), sourceOpened: true, typeId: typeOf.get(match.lead.url) ?? firstType, searchArea: areaOf.get(match.lead.url) ?? (areasCovered[0] as string), ...(match.advertAgeDays === undefined ? {} : { advertAgeDays: match.advertAgeDays }) });
           if (result.recorded) {
             tally.found += 1;
+            kindTally(typeOf.get(match.lead.url) ?? firstType).found += 1;
             // A group on the excluded list is kept on the list (so it is not found again) and set aside at once, without spending an analysis on it.
             const own = forType(settings, typeOf.get(match.lead.url) ?? firstType);
             if (settings.filters.exclude_groups && (namedGroup(match.businessName, own) || namedGroup(website, own))) {
@@ -581,11 +585,12 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   };
   /** Google Places, for each place in today's rotation. Plain code, no model call, no web search. */
   const placesRoute = async (findRunId: string, cap: number): Promise<void> => {
+      // What is left of each kind's share after its backlog.
+      const shareOf = (typeId: string) => Math.max(0, kindShare - (backlogOf.get(typeId) ?? 0));
       // THE BATCH IS DIVIDED BETWEEN THE KINDS BEFORE ANYTHING IS LOOKED FOR. Each kind switched on gets an equal share
       // of the room in this run, so one kind's results cannot fill it before another is searched. What a kind finds
       // beyond its share is kept to one side, and used only if the others leave room.
       const kindsHere = [...new Set(pairs.map((pair) => pair.typeId))];
-      const share = Math.max(1, Math.floor(cap / Math.max(1, kindsHere.length)));
       const foundOf = new Map<string, number>();
       const spare = new Map<string, { place: Place; area: string }[]>();
       const tokens = new Map<string, string | null>();
@@ -596,14 +601,14 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
         for (let n = 0; n < most; n += 1) {
           for (const pair of pairs) {
             const phrase = forType(settings, pair.typeId).type.search_phrases[n];
-            if (!phrase || tally.found >= cap || (foundOf.get(pair.typeId) ?? 0) >= share) continue;
+            if (!phrase || tally.found >= cap || (foundOf.get(pair.typeId) ?? 0) >= shareOf(pair.typeId)) continue;
             const key = `${pair.typeId}|${pair.area}|${phrase}`;
             if (page > 0 && !tokens.get(key)) continue;
             const token = tokens.get(key);
             const got = await askPlaces({ query: `${phrase} in ${pair.area}`, pageSize: 20, ...(token ? { pageToken: token } : {}) }, pair.typeId);
             tokens.set(key, got?.nextPageToken ?? null);
             for (const found of got?.places ?? []) {
-              if (tally.found >= cap || (foundOf.get(pair.typeId) ?? 0) >= share) { spare.set(pair.typeId, [...(spare.get(pair.typeId) ?? []), { place: found, area: pair.area }]); continue; }
+              if (tally.found >= cap || (foundOf.get(pair.typeId) ?? 0) >= shareOf(pair.typeId)) { spare.set(pair.typeId, [...(spare.get(pair.typeId) ?? []), { place: found, area: pair.area }]); continue; }
               if (await recordPlace(found, pair.area, findRunId, pair.typeId)) foundOf.set(pair.typeId, (foundOf.get(pair.typeId) ?? 0) + 1);
             }
           }
@@ -690,6 +695,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     const triage = await triageAnalysed(db, scope(lastRunId), settings, clock(), (p, s) => notTestableReason(p, s, settings));
     filterInto(triage.filtered);
     toTest = triage.toTest;
+    for (const p of toTest) kindTally(p.typeId).testable += 1;
     untested = triage.passedUntested;
     tally.not_testable = untested.length + (triage.filtered.no_signal ?? 0);
     tally.would_pass_with_companies_house = triage.wouldPassWithCompaniesHouse;
@@ -811,6 +817,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
         const result = await proposeEnquiry(db, ctx.gateway, scope(runId), want.prospect, draft, clock(), want.purpose, namedService, want.slot ?? null, settings.enquiry_slots);
         if (result.proposed) {
           tally.enquiries_proposed[want.purpose] += 1;
+          kindTally(want.prospect.typeId).queued += 1;
           allowance -= 1;
         } else if (result.why === "refused" && (result.detail === "cap_exceeded" || result.detail === "kill_switch" || result.detail === "budget_exceeded")) {
           notes.push("The gateway refused further enquiries today (the day's allowance, the kill switch or the budget). The rest wait.");
@@ -931,6 +938,9 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
     rung: await db.tx(tenantId, (tx) => readRung(tx, businessId, ENQUIRY_ACTION)),
     sent_without_asking: await sentWithoutAsking(db, scope(lastRunId), clock()),
     stopped: await breakerToday(db, tenantId, clock()),
+    // Which reply, and which sentence of it, was read as a complaint: for the owner to judge.
+    complaints: await complaintsToday(db, scope(lastRunId), clock()),
+    // Results scored between runs, on the ten minute round, that this shortlist now cards.
     room: `${ctx.businessSlug}:${DEPARTMENT}`,
     mail_out: ctx.mailOut?.() ?? null,
   };
@@ -944,7 +954,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
   const totalGbp = toGbp(Object.values(costs).reduce((sum, t) => sum + t.costUsd, 0));
   const per = (n: number) => (n > 0 ? Math.round((totalGbp / n) * 1e4) / 1e4 : null);
   const data = {
-    date: day, tally, areas_searched: areasCovered, waiting_for_analysis: waiting,
+    date: day, tally, by_kind: byKind, areas_searched: areasCovered, waiting_for_analysis: waiting,
     cut_short: limited.map((l) => ({ channel: l.channel, why: l.why, retry_after_seconds: l.seconds })),
     enquiries, replies_collected: replyCounts,
     places: ctx.places ? { ...placesUse, limit: settings.max_places_calls_per_run, price_tier: PLACES_PRICE_TIERS.search } : null,
@@ -962,7 +972,7 @@ export async function runOutreach(ctx: OutreachContext): Promise<void> {
       `${placesUse.not_made_at_limit > 0 ? `; ${placesUse.not_made_at_limit} more were not made at the limit` : ""}${placesUse.failed > 0 ? `; ${placesUse.failed} failed and were skipped` : ""}. This cost is not in the model cost below.`);
   } else notes.push("Google Places is not configured (no key), so businesses were found by web search.");
   const timezone = (await db.tx(tenantId, async (tx) => (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone)) as string;
-  const body = renderShortlist(title, settings, tally, cards, data.costs, fetches, notes, ctx.companiesHouse !== null, areasCovered, enquiries, timezone);
+  const body = renderShortlist(title, settings, tally, cards, data.costs, fetches, notes, ctx.companiesHouse !== null, areasCovered, enquiries, timezone, byKind);
   const now = clock();
   // The agent tools' role is the one allowed to add an output. It cannot read it back, so the id is made here.
   const outputId = randomUUID();
@@ -990,7 +1000,32 @@ function resultFacts(t: TestedProspect): string[] {
     ...(t.test.replies.some((r) => r.kind === "automatic") ? ["An automatic acknowledgement came back. It is not a reply from a person."] : []),
     ...(first?.answered ? [`The reply ${first.answered.value ? "answered" : "did not answer"} the question asked.`] : []),
     ...(first?.next_step ? [`The reply ${first.next_step.value ? "offered" : "did not offer"} a next step.`] : []),
+    ...(first?.told_to_call ? [`The reply did not answer by email and told the enquirer to telephone. In its words: "${first.told_to_call}"`] : []),
   ];
+}
+
+/**
+ * A room's results so far today: every business scored since midnight, as each enquiry's wait ended. No model wrote
+ * any of it and there is no drafted message here: those come with the morning's shortlist.
+ */
+export function renderResultsSoFar(title: string, results: ResultSoFar[], settings: OutreachSettings): string {
+  const when = (r: ResultSoFar) => {
+    const at = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(r.sentAt)).replace(",", "");
+    const state = r.openingState === "closed" ? ", when they were closed" : r.openingState === "open" ? ", when they were open" : "";
+    return `sent ${at}${state}${r.slot ? ` (${SLOT_NAME[r.slot as Slot]})` : ""}`;
+  };
+  const line = (r: ResultSoFar) => `- **${r.name}** (${r.kind}): capture ${r.captureScore === null ? "not measured" : `${r.captureScore} out of 100`}; ${when(r)}. ${r.note.charAt(0).toUpperCase()}${r.note.slice(1)}`;
+  const prospects = results.filter((r) => r.outcome === "prospect");
+  const others = results.filter((r) => r.outcome !== "prospect");
+  const why: Record<string, string> = { captures_well: "answers well: kept as a comparison", opted_out: "asked not to be contacted", enquiry_bounced: "the enquiry could not be delivered" };
+  return [
+    `# ${title}`, "",
+    `Scored as each enquiry's wait ended, and brought up to date every ten minutes. ${results.length} so far today. The full shortlist, with a drafted first message for each, is written by the morning run.`, "",
+    `## Everyone tested: ${prospects.length}, worst first`, "", "The lower the score, the more of their enquiries they are losing. You decide who to call.", "",
+    ...(prospects.length ? [...prospects].sort((a, b) => (a.captureScore ?? 101) - (b.captureScore ?? 101)).map(line) : ["- none yet"]), "",
+    `## Left off: ${others.length}`, "",
+    ...(others.length ? others.map((r) => `${line(r)} Left off: ${why[r.outcome] ?? r.outcome.replace(/_/g, " ")}.`) : ["- none yet"]), "",
+  ].join("\n");
 }
 
 /** The windows enquiries go in, read from the settings in force, in plain words. */
@@ -1098,8 +1133,9 @@ const shown = (value: unknown): string => {
 export function renderShortlist(
   title: string, settings: OutreachSettings, tally: Tally, cards: Card[],
   costs: Record<string, any>, fetches: FetchCounts, notes: string[], companiesHouseChecked: boolean, areas: string[],
-  enquiries: { waiting_for_approval: number; approved_not_sent: number; queued_to_send?: number; sent_awaiting: number; scored: number; sent_without_asking?: { total: number; by_kind: Record<string, number>; ids?: string[] }; rung?: number; stopped?: string | null; room?: string; mail_out?: string | null } | null,
+  enquiries: { waiting_for_approval: number; approved_not_sent: number; queued_to_send?: number; sent_awaiting: number; scored: number; sent_without_asking?: { total: number; by_kind: Record<string, number>; ids?: string[] }; rung?: number; stopped?: string | null; room?: string; mail_out?: string | null; complaints?: { business: string; sentence: string }[] } | null,
   timezone = "Europe/London",
+  byKind: Record<string, { found: number; analysed: number; testable: number; queued: number }> | null = null,
 ): string {
   const filtered = Object.entries(tally.filtered_out).sort(([a], [b]) => a.localeCompare(b));
   const stageCosts = Object.entries(costs).filter(([, v]) => v && typeof v === "object" && "model_calls" in v && (v.model_calls > 0 || v.failed_calls > 0))
@@ -1110,7 +1146,15 @@ export function renderShortlist(
     ...(enquiries
       ? [
           ...(enquiries.mail_out ? [`**MAIL CANNOT BE SENT FROM THIS SERVER (${enquiries.mail_out}).** No enquiry is being sent, and none is being attempted. Those queued wait, untouched. This line stays until it is fixed.`, ""] : []),
-          ...(enquiries.stopped ? [`**SENDING IS STOPPED FOR TODAY: ${enquiries.stopped}.** Nothing more is sent until tomorrow. Look at this before then.`, ""] : []),
+          ...(enquiries.stopped ? [`**SENDING IS STOPPED FOR TODAY: ${enquiries.stopped}.** Nothing more is sent until tomorrow. Look at this before then.`, ...((enquiries.complaints ?? []).length > 0 ? [] : [""])] : []),
+          // Straight under the line it explains: which business, and the sentence that was read as a complaint.
+          ...((enquiries.complaints ?? []).length > 0 && enquiries.stopped
+            ? [...(enquiries.complaints ?? []).map((c) => `- Read as a complaint, from **${c.business}**: "${c.sentence.replace(/\s+/g, " ").slice(0, 300)}"`), "- If that is not a complaint, sending can be allowed again today with `WH_CLEAR_STOP` (see DEPLOY.md).", ""]
+            : []),
+          // One complaint never stops sending; it is still shown, with the business now left alone for good.
+          ...((enquiries.complaints ?? []).length > 0 && !enquiries.stopped
+            ? [`**Complaints today: ${(enquiries.complaints ?? []).length}.** Each business below is never written to again. Sending carries on.`, ...(enquiries.complaints ?? []).map((c) => `- From **${c.business}**: "${c.sentence.replace(/\s+/g, " ").slice(0, 300)}"`), ""]
+            : []),
           ...(enquiries.rung !== undefined && enquiries.rung >= 3
             ? [`**Sent without asking since the last shortlist was written: ${enquiries.sent_without_asking?.total ?? 0}**` +
                 `${(enquiries.sent_without_asking?.total ?? 0) > 0 ? ` (${Object.entries(enquiries.sent_without_asking?.by_kind ?? {}).map(([kind, n]) => `${kind} ${n}`).join(", ")})` : ""}. ` +
@@ -1120,7 +1164,7 @@ export function renderShortlist(
           `**Test enquiries:** ${enquiries.waiting_for_approval} waiting for your approval, ${enquiries.approved_not_sent} approved and waiting to be sent, ` +
             `${(enquiries.queued_to_send ?? 0) > 0 ? `${enquiries.queued_to_send} queued to send without asking, ` : ""}` +
             `${enquiries.sent_awaiting} sent and inside their ${settings.reply_wait_hours} hours, ${enquiries.scored} scored so far.`,
-          ...(tally.scored_after_test === 0 ? [`No enquiry was ${settings.reply_wait_hours} hours old on this run, so no business has a new test result today.`] : []),
+          ...(tally.scored_after_test === 0 && cards.every((c) => !c.test) ? [`No enquiry was ${settings.reply_wait_hours} hours old on this run, so no business has a new test result today.`] : []),
           "",
         ]
       : []),
@@ -1136,6 +1180,14 @@ export function renderShortlist(
     `- Filtered out: ${filtered.reduce((sum, [, n]) => sum + n, 0)}${filtered.length ? ` (${filtered.map(([reason, n]) => `${reason}: ${n}`).join(", ")})` : ""}`,
     `- Shortlisted: ${tally.shortlisted}${tally.reissued > 0 ? `, and ${tally.reissued} issued again with rivals' results` : ""}`,
     `- Searches and page reads: ${fetches.fetched} made, ${fetches.fromCache} from today's cache${(fetches.refusedAtLimit ?? 0) > 0 ? `, ${fetches.refusedAtLimit} not made at the limit` : ""}`,
+    ...(byKind
+      ? ["", "By kind of business, this run (found / analysed / ready to test by email / enquiries drafted):",
+         ...settings.business_types.filter((t) => t.enabled || byKind[t.id]).map((t) => {
+           const k = byKind[t.id] ?? { found: 0, analysed: 0, testable: 0, queued: 0 };
+           const nothing = k.found + k.analysed + k.testable + k.queued === 0;
+           return `- ${t.id}${t.enabled ? "" : " (switched off)"}: ${k.found} / ${k.analysed} / ${k.testable} / ${k.queued}${nothing && t.enabled ? "  <- NOTHING this run" : ""}`;
+         })]
+      : []),
     "",
     "Read this first:",
     "",
@@ -1196,7 +1248,9 @@ export function renderShortlist(
         "Evidence:", "",
         `- Test enquiry sent ${when(t.test.sent_at)}, signed "${settings.enquiry_signoff}", asking: ${quote(t.enquiry.body)}`,
         ...(t.test.slot ? [`- ${sentWhen(t.test, timezone)}`] : []),
-        firstReply ? `- A person replied ${when(firstReply.received_at)}: ${quote(firstReply.text)}` : `- No reply from a person within ${settings.reply_wait_hours} hours.`,
+        firstReply ? `- A person replied ${when(firstReply.received_at)}: ${quote(ownWords(firstReply.text) || firstReply.text)}` : `- No reply from a person within ${settings.reply_wait_hours} hours.`,
+        // A selling point in their own words: asked a plain question by email, they would not answer it by email.
+        ...(firstReply?.told_to_call ? [`- **They did not answer the question by email and sent the enquirer to the telephone:** ${quote(firstReply.told_to_call)}`] : []),
         ...(t.test.replies.some((r) => r.kind === "automatic" && (r.answered?.value === true || r.next_step?.value === true))
           ? ["- An automatic reply came back that answered the question or offered a way to book. For an enquiry sent while they were shut, that counts as something useful."] : []),
         ...(t.test.replies.some((r) => r.kind === "automatic" && r.answered?.value !== true && r.next_step?.value !== true) ? ["- An automatic acknowledgement was received. It is noted and not counted as a reply."] : []),

@@ -414,6 +414,7 @@ export const replySchema = z.object({
   asks_not_to_be_contacted: z.boolean(),
   answered_the_question: quoted.describe("Did the reply answer what was asked (the price, or when an appointment is available)?"),
   offered_a_next_step: quoted.describe("Did it offer a way forward: a time, a call, a consultation, a link to book?"),
+  complains_about_being_contacted: quoted.describe("Does the writer object to having been written to at all (calls it spam or unsolicited, asks how their address was obtained, tells us to stop)? Declining to give a price by email, or asking us to telephone, is NOT a complaint."),
 });
 
 export interface ReplyReading {
@@ -422,6 +423,8 @@ export interface ReplyReading {
   /** null: could not be told, or the sentence given is not in the reply. */
   answered: { value: boolean; quote: string | null } | null;
   nextStep: { value: boolean; quote: string | null } | null;
+  /** A complaint about being contacted, with the sentence. null: not one, or no sentence of the reply's own behind it. */
+  complaint: { value: boolean; quote: string | null } | null;
 }
 
 const flat = (text: string): string => text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -447,6 +450,7 @@ export async function readReply(model: ModelCaller, apiKey: string, system: stri
       asksNotToBeContacted: answer.data.asks_not_to_be_contacted === true,
       answered: check(answer.data.answered_the_question),
       nextStep: check(answer.data.offered_a_next_step),
+      complaint: check(answer.data.complains_about_being_contacted),
     },
   };
 }

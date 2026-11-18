@@ -10,12 +10,16 @@ import { createDirectReader } from "./control/connectors/direct-read.js";
 import { createPostHogConnector } from "./control/connectors/posthog.js";
 import { ADMIN_ONLY_ENV, BOOTSTRAP_FAILED, bootstrapFromEnv, connectionUrls } from "./bootstrap.js";
 import { createDb, isUuid } from "./control/db.js";
+import { installProcessGuard } from "./guard.js";
 import { createRuntime } from "./runtime.js";
 import { createScheduler } from "./scheduler.js";
 import { apiKeyEnvName } from "./seed.js";
 import { createRunnerServer } from "./server.js";
 
 const env = process.env;
+
+// Nothing that goes wrong with one web page, one mailbox call or one run may stop the whole server.
+installProcessGuard(process);
 
 // The database setup, when this process is asked to do it itself (WH_BOOTSTRAP=1). The image does it in a
 // separate process first (start.js), which is the safer way: this one then never has the owner's URL at all.
@@ -131,6 +135,18 @@ server.listen(port, host, () => {
   built?.scheduler.start(60_000);
   if (runtime) {
     void (async () => {
+      // A run left "running" by a process that is gone would leave its room stuck for good. Each is closed as failed, and a
+      // pipeline run that was cut off is started again, once, a little after start.
+      const cut = await runtime.closeInterrupted().catch(() => ({ closed: 0, restart: [] as string[] }));
+      if (cut.closed > 0) console.log(`runs left running by an earlier process, closed as interrupted_by_restart: ${cut.closed}`);
+      for (const room of cut.restart) {
+        setTimeout(() => void runtime.startRun(room, {}).then((r) => console.log(`run cut off by the restart, started again: ${room.replace(/[^a-z0-9:-]/gi, "")} (${r.status})`), () => undefined), 30_000);
+      }
+      // The owner's switch: lift a stop on sending for one day, once.
+      if (env.WH_CLEAR_STOP) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(env.WH_CLEAR_STOP)) console.error("WH_CLEAR_STOP must be a date written YYYY-MM-DD. Nothing was lifted.");
+        else console.log(`stop on sending for ${env.WH_CLEAR_STOP}: ${(await runtime.clearStop(env.WH_CLEAR_STOP).catch(() => false)) ? "lifted by the owner's switch" : "nothing to lift (not today, not stopped, or already lifted once)"}`);
+      }
       const mail = await runtime.checkMail().catch(() => null);
       if (mail) {
         console.log(`mail out: ${mail.out.reachable ? "reachable" : `unreachable (${mail.out.code ?? "unknown"})`}`);

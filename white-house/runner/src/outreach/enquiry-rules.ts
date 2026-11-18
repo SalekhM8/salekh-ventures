@@ -290,6 +290,12 @@ export interface StoredReply {
   text: string;
   answered?: { value: boolean; quote: string | null } | null;
   next_step?: { value: boolean; quote: string | null } | null;
+  /** The sentence, in the reply's own words, that was read as a complaint about being contacted. Set only when both the phrase check and the reply reader agreed. */
+  complaint_sentence?: string;
+  /** Whether the reply's own words asked not to be contacted again. */
+  opt_out?: boolean;
+  /** The sentence in which the reply declined to answer by email and sent the person to the telephone, when it did. */
+  told_to_call?: string;
 }
 
 export interface TestResult {
@@ -350,11 +356,65 @@ export function openAt(periods: { open: { day: number; minutes: number }; close:
 
 // ---- replies that must stop sending ---------------------------------------------------
 
-const COMPLAINT = /\b(spam|unsolicited|junk mail|harass|report(ed|ing)? (you|this)|how did you get (my|our|this)|stop (emailing|contacting|messaging)|gdpr|data protection|information commissioner|\bico\b|legal action|cease and desist|complain(t|ing)?|not interested.{0,40}(again|further)|take (me|us) off|who (are|is) (you|this)\?)/i;
+// Words of somebody who minds being written to. Deliberately NOT here: "complaint", "data protection", "GDPR", "ICO"
+// and "do not contact" on their own, because a solicitor's or an adviser's standard footer has every one of them.
+const COMPLAINT = /\b(spam|unsolicited|junk mail|harass\w*|report(ed|ing)? (you|this)|how did you get (my|our|this)|stop (emailing|contacting|messaging|writing)|legal action|cease and desist|take (me|us) off|not interested.{0,40}(again|further)|do not (contact|email|write to) (me|us)( again)?|remove (me|us) from)\b/i;
 
-/** Does the reply read as a complaint about being contacted? Wider than a plain request not to be contacted, and it includes one. */
+const QUOTE_STARTS = [
+  /^\s*>/,                                                        // quoted lines
+  /^\s*On .{5,200}(wrote|écrit|schrieb):?\s*$/i,                  // "On Tue, 17 Nov 2026 at 10:34, Salekh wrote:"
+  /^\s*-{2,}\s*(Original|Forwarded) Message\s*-{2,}/i,
+  /^\s*(From|Sent|To|Subject|Date):\s.+/i,                         // the header block Outlook puts above what it quotes
+  /^\s*_{5,}\s*$/,                                                 // the rule Outlook draws above it
+];
+const SIGN_OFF = /^\s*(kind regards|kindest regards|best regards|warm regards|regards|best wishes|many thanks|thanks|thank you|yours sincerely|yours faithfully|sincerely|cheers)[,.!]?\s*$/i;
+const SIGNATURE = /^\s*--\s*$|^\s*sent from my \w+/i;
+const FOOTER = /\b(confidential|intended (solely )?for the (addressee|recipient|person)|intended recipient|received this (e-?mail|message|communication) in error|disclaimer|privileged|regulated by|authorised and regulated|registered (in|office)|company (number|no\.?|registration)|vat (number|no\.?|reg)|virus(es)?|please consider the environment|complaints procedure|privacy (policy|notice)|data protection|unsubscribe)\b/i;
+
+/**
+ * A reply's OWN WORDS: what the person (or their system) wrote this time. Everything else is taken off before
+ * anything is judged: the text they are replying to, quoted below; their signature; and the legal footer a firm
+ * adds to every email it sends, which talks of confidentiality, complaints and not contacting people and has
+ * nothing to do with this message.
+ */
+export function ownWords(text: string): string {
+  const kept: string[] = [];
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  for (const [i, line] of lines.entries()) {
+    if (QUOTE_STARTS.some((start, n) => start.test(line) && (n !== 3 || /^\s*(From|Sent):/i.test(line) && lines.slice(i, i + 5).filter((l) => /^\s*(From|Sent|To|Subject|Date):/i.test(l)).length >= 2))) break;
+    if (SIGNATURE.test(line)) break;
+    kept.push(line);
+    // The sign-off is kept; what follows it (a name, a job title, phone numbers, the footer) is not.
+    if (SIGN_OFF.test(line) && kept.join(" ").trim().length > line.trim().length) break;
+  }
+  // A footer with no sign-off before it: paragraphs that read like one are dropped.
+  return kept.join("\n").split(/\n\s*\n/).filter((paragraph) => !FOOTER.test(paragraph)).join("\n\n").trim();
+}
+
+/**
+ * Do a reply's own words read as a complaint about being contacted? This is one of two things needed before
+ * anything is stopped: the other is the reply reader agreeing, with a sentence that is really in those words.
+ * "We do not give prices by email" and "please call us" are not complaints.
+ */
 export function readsAsComplaint(text: string): boolean {
-  return asksNotToBeContacted(text) || COMPLAINT.test(text);
+  return COMPLAINT.test(text);
+}
+
+const TO_CALL = /\b(call|phone|telephone|ring|contact|speak to) (us|the office|our offices?|the practice|the clinic|the surgery|the team|reception|someone)\b|\b(need|have) to (call|phone|telephone|ring)\b|\b(by|over the) (phone|telephone)\b|\b(cannot|can't|do not|don't|unable to) (give|provide|quote|discuss) .{0,40}(by|over|via|on) e-?mail\b/i;
+const A_REAL_STEP = /\b(book(ing)? (online|here|now|a)|appointment (on|at|for)|available (on|at|from)|we (can|could) (see|speak to|call) you|call you back|ring you back|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|\d{1,2}([:.]\d{2})? ?(am|pm))\b/i;
+
+/** Does the reply send the person to the telephone? */
+export function saysToCall(ownText: string): boolean {
+  return TO_CALL.test(ownText);
+}
+/** Is this "next step" nothing more than "call us"? A time, a call back or a way to book makes it a real one. */
+export function saysOnlyToCall(sentence: string): boolean {
+  return TO_CALL.test(sentence) && !A_REAL_STEP.test(sentence);
+}
+/** The sentence that sends the person to the telephone, to quote. */
+export function sentenceToCall(ownText: string): string {
+  const sentences = ownText.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/);
+  return (sentences.find((sentence) => TO_CALL.test(sentence)) ?? "").trim().slice(0, 300);
 }
 
 /** Is this a notice that the enquiry could not be delivered? Judged from who sent it and its subject, never from its body. */

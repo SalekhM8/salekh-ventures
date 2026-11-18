@@ -437,7 +437,7 @@ export function countWaiting(db: Db, scope: { tenantId: string; businessId: stri
 }
 
 /** Found and not yet analysed: today's finds and anything left from an earlier run. */
-export function listForAnalysis(db: Db, scope: ProspectScope, limit: number): Promise<ProspectRow[]> {
+export function listForAnalysis(db: Db, scope: ProspectScope, limit: number, perKind: number | null = null): Promise<ProspectRow[]> {
   return db.tx(scope.tenantId, async (tx) =>
     (await tx.query(
       // The batch is shared between the kinds of business: one of each kind in turn, so no kind's backlog waits behind
@@ -445,8 +445,10 @@ export function listForAnalysis(db: Db, scope: ProspectScope, limit: number): Pr
       `select ${COLUMNS} from (
          select *, row_number() over (partition by business_type order by (signals @> '[{"signal": "hiring_front_desk"}]'::jsonb) desc, found_at, prospect_id) as turn
            from prospects where business_id = $1 and stage = 'found') waiting
+        -- with a share given, no kind takes more than its share of the batch, however many of it are waiting
+        where $3::int is null or turn <= $3
         order by turn, (signals @> '[{"signal": "hiring_front_desk"}]'::jsonb) desc, found_at, prospect_id limit $2`,
-      [scope.businessId, limit],
+      [scope.businessId, limit, perKind],
     )).rows.map(toRow));
 }
 

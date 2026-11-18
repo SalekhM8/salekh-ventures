@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { DEPARTMENTS, type DepartmentDef } from "./agents/departments.js";
@@ -15,13 +15,13 @@ import type { TrafficConnector } from "./control/connectors/posthog.js";
 import type { ModelCaller } from "./agents/model-caller.js";
 import { runOutreach } from "./outreach/pipeline.js";
 import { forType, parseOutreachSettings, type OutreachSettings } from "./outreach/settings.js";
-import { countWaiting } from "./outreach/store.js";
+import { awaitingCompanyCheck, countWaiting, PROSPECT_COLUMNS, saveCompanyCheck, toProspectRow } from "./outreach/store.js";
 import type { Mailbox, MailCheck } from "./control/connectors/mailbox.js";
 import type { PlacesConnector } from "./control/connectors/places.js";
 import type { DirectReader } from "./control/connectors/direct-read.js";
-import { assignMissingSlots, breakerToday, checkFailures, requeueUnsent, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
+import { assignMissingSlots, breakerToday, checkFailures, clearStop, listReplies, requeueUnsent, resultsToday, scoreDue, type ReplyRecord, collectReplies, createMailConnector, ENQUIRY_ACTION, listEnquiries, requeueAfterRungChange, syncDecisions, tripBreaker, type ReplyCounts, type SentEnquiry } from "./outreach/enquiries.js";
 import { lintEnquiry, nextOpening, openAt, scoreAfter, slotAt, type Slot } from "./outreach/enquiry-rules.js";
-import { replyPrompt } from "./outreach/pipeline.js";
+import { renderResultsSoFar, replyPrompt } from "./outreach/pipeline.js";
 import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
 import { emitEvent, type EventInput } from "./control/events.js";
@@ -126,6 +126,18 @@ export interface Runtime {
   checkMail(): Promise<MailCheck | null>;
   /** Put back in the queue the enquiries marked failed since a day that never reached the mail server. Returns how many. */
   requeueUnsent(since: Date): Promise<number>;
+  /**
+   * At start: close every run left "running" by a process that is no longer there, as failed with the reason
+   * interrupted_by_restart. `restart` names the pipeline rooms whose run was cut off and has not already been
+   * restarted once today.
+   */
+  closeInterrupted(): Promise<{ closed: number; restart: string[] }>;
+  /** The owner's switch: lift a stop on sending for one day (YYYY-MM-DD). true when it lifted one. */
+  clearStop(day: string): Promise<boolean>;
+  /** Score whatever is due and bring each room's "Results so far today" up to date. Returns how many were scored. */
+  scoreDue(): Promise<number>;
+  /** Replies received in one room since a moment (default: the last seven days). Personal data, on purpose. */
+  listReplies(roomId: string, since: string | null): Promise<Answer<{ replies: ReplyRecord[] }>>;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -664,6 +676,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       db: gatewayDb, tenantId, mailbox, model: options.model ?? null, apiKey: options.apiKeyFor((tenant?.slug as string | null) ?? "") ?? null,
       system, usdToGbp: options.usdToGbp, now: clock,
     });
+    // Whatever has had its wait is scored now, not at the next morning's run, and the room's results so far are brought up to date.
+    await scoreDueNow().catch((err) => console.error(`scoring on the round failed: ${err instanceof Error ? err.name : "error"}`));
     // The same round also sends anything due that was held over (the sending hours, yesterday's allowance, a kill switch since lifted).
     kickSender();
     changed();
@@ -677,6 +691,86 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   }
   /** For the top of the shortlist: why mail cannot leave this server, or null when it can (or has not been checked). */
   const mailOut = (): string | null => (mailState && !mailState.out.reachable ? (mailState.out.code ?? "unknown") : null);
+
+  const listRepliesOf: Runtime["listReplies"] = async (roomId, since) => {
+    const from = since === null ? new Date(clock().getTime() - 7 * 24 * 60 * 60 * 1000) : new Date(since);
+    if (Number.isNaN(from.getTime())) return { status: 422, reason: "since must be a date and time, for example 2026-11-17T08:00:00Z" };
+    const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
+    if (!room) return { status: 404 };
+    return { status: 200, replies: await listReplies(gatewayDb, tenantId, room.businessId, from) };
+  };
+
+  /** A fixed id for a room's results on one day, so the same output is found and brought up to date, never duplicated. */
+  const resultsId = (businessId: string, day: string): string => {
+    const h = createHash("sha256").update(`results-so-far|${tenantId}|${businessId}|${day}`).digest("hex");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  };
+
+  async function scoreDueNow(): Promise<number> {
+    if (standby) return 0;
+    // Every floor with enquiries out and not yet scored.
+    const floors = await gatewayDb.tx(tenantId, async (tx) =>
+      (await tx.query("select distinct e.business_id from enquiries e join prospects p on p.prospect_id = e.prospect_id where e.status = 'sent' and p.capture_score is null")).rows.map((r) => r.business_id as string));
+    let total = 0;
+    for (const businessId of floors) {
+      // A run in this room scores as it goes: the two are not done at once.
+      const slug = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select slug from businesses where business_id = $1", [businessId])).rows[0]?.slug as string | undefined);
+      if (slug && inFlight.has(`${slug}:outreach`)) continue;
+      const scope = { tenantId, businessId, runId: null };
+      const settings = await settingsOf(businessId);
+      const scored = await scoreDue(gatewayDb, scope, settings, clock(), options.companiesHouse ?? null, { toRow: toProspectRow, columns: PROSPECT_COLUMNS, awaitingCompanyCheck, saveCompanyCheck });
+      if (scored.scored === 0) continue;
+      total += scored.scored;
+      const { day, results } = await resultsToday(gatewayDb, scope, clock());
+      const title = `Results so far, ${day}`;
+      const body = renderResultsSoFar(title, results, settings);
+      const data = { date: day, results: results.map((r) => ({ prospect_id: r.prospectId, kind: r.kind, capture_score: r.captureScore, outcome: r.outcome })) };
+      const outputId = resultsId(businessId, day);
+      const exists = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select 1 from outputs where output_id = $1", [outputId])).rows.length > 0);
+      if (exists) await gatewayDb.tx(tenantId, (tx) => tx.query("update outputs set body = $2, data = $3::jsonb where output_id = $1", [outputId, body, JSON.stringify(data)]));
+      else {
+        await agentDb.tx(tenantId, (tx) => tx.query(
+          "insert into outputs (output_id, tenant_id, business_id, department, run_id, title, body, data, created_at) values ($1, $2, $3, 'outreach', null, $4, $5, $6::jsonb, $7)",
+          [outputId, tenantId, businessId, title, body, JSON.stringify(data), clock()]));
+        await gatewayDb.tx(tenantId, (tx) => emitEvent(tx, { tenantId, businessId, department: "outreach", type: "output", summary: "A piece of work was finished", payload: { outputId }, now: clock() }));
+      }
+      changed();
+    }
+    return total;
+  }
+
+  async function closeInterrupted(): Promise<{ closed: number; restart: string[] }> {
+    if (standby) return { closed: 0, restart: [] };
+    const left = await gatewayDb.tx(tenantId, async (tx) => (await tx.query(
+      "select r.run_id, r.business_id, r.department, r.trigger, b.slug from runs r left join businesses b on b.business_id = r.business_id where r.status = 'running' order by r.started_at")).rows);
+    const rooms = new Set<string>();
+    for (const run of left) {
+      // Runs of this very process are not touched (there are none at start, which is when this is called).
+      if (run.slug && inFlight.has(`${run.slug}:${run.department}`)) continue;
+      const closed = await finishRun(gatewayDb, { tenantId, runId: run.run_id, status: "failed", tokensIn: 0, tokensOut: 0, tokensCached: 0, costGbp: 0, error: "interrupted_by_restart" }, { now: clock() });
+      if (!closed.recorded) continue;
+      await gatewayDb.tx(tenantId, (tx) => emitEvent(tx, {
+        tenantId, businessId: run.business_id, department: run.department, runId: run.run_id, type: "failed", reasonCode: "interrupted_by_restart",
+        summary: "The run was cut off by a restart of the server and has been closed", now: clock(),
+      }));
+      if (run.slug && PIPELINES[run.department as string]) rooms.add(`${run.slug}:${run.department}|${run.business_id}|${run.department}`);
+    }
+    const restart: string[] = [];
+    for (const entry of rooms) {
+      const [roomId, businessId, department] = entry.split("|") as [string, string, string];
+      // Once: a room already restarted after an interruption today is not started again, so a server that keeps falling over does not loop.
+      const before = await gatewayDb.tx(tenantId, async (tx) => (await tx.query(
+        `select count(*)::int as n from events e join tenants t on t.tenant_id = e.tenant_id
+          where e.type = 'stage' and e.reason_code = 'restarted_after_interruption' and e.business_id = $1 and e.department = $2
+            and (e.created_at at time zone t.timezone)::date = (($3::timestamptz) at time zone t.timezone)::date`,
+        [businessId, department, clock()])).rows[0].n as number);
+      if (before > 0) continue;
+      await gatewayDb.tx(tenantId, (tx) => emitEvent(tx, { tenantId, businessId, department, type: "stage", reasonCode: "restarted_after_interruption", summary: "The run that was cut off will be started again, once", now: clock() }));
+      restart.push(roomId);
+    }
+    if (left.length > 0) changed();
+    return { closed: left.length, restart };
+  }
 
   const listSent: Runtime["listSent"] = async (roomId, since) => {
     const from = since === null ? new Date(clock().getTime() - 7 * 24 * 60 * 60 * 1000) : new Date(since);
@@ -949,5 +1043,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

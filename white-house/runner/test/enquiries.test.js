@@ -11,6 +11,8 @@ import { isConnectionFailure, mailboxFromEnv, MailboxLoginError, MailboxUnreacha
 import { createGmailApiMailbox, GMAIL_SCOPES, toRfc822 } from "../dist/control/connectors/gmail-api.js";
 import { consentUrl, writeEnvValue } from "../dist/gmail-authorise.js";
 import { requeueUnsent } from "../dist/outreach/enquiries.js";
+import { ownWords, saysOnlyToCall, saysToCall, sentenceToCall } from "../dist/outreach/enquiry-rules.js";
+import { installProcessGuard } from "../dist/guard.js";
 import { sendingWindows } from "../dist/outreach/pipeline.js";
 import { adoptNewDefaults, DEFAULTS_VERSION } from "../dist/outreach/settings.js";
 import { listForAnalysis } from "../dist/outreach/store.js";
@@ -200,7 +202,8 @@ function fakeModel(hooks = {}) {
     const refused = hooks.refuse?.(request);
     if (refused) return refused;
     if (request.stage === "enquiry") return { data: (await hooks.enquiry?.(request)) ?? GOOD, costUsd: 0.01, usage };
-    if (request.stage === "reply") return { data: await hooks.reply(request), costUsd: 0.01, usage };
+    // (a reply hook says only what its test is about: the reader's view on a complaint defaults to "no")
+    if (request.stage === "reply") return { data: { complains_about_being_contacted: { value: false, quote: null }, ...(await hooks.reply(request)) }, costUsd: 0.01, usage };
     if (request.stage === "find" && hooks.find) return { data: await hooks.find(request), costUsd: 0.01, usage };
     if (request.stage === "analyse" && hooks.analyse) return { data: asModelAnswer(await hooks.analyse(request)), costUsd: 0.01, usage };
     if (request.stage === "draft") return { data: request.user.includes("A TEST ENQUIRY WAS SENT") ? TESTED_CARD : PLAIN_CARD, costUsd: 0.05, usage };
@@ -459,8 +462,8 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
   const a1 = await prospectOf(alpha.id);
   const b1 = await prospectOf(beta.id);
   assert.deepEqual([a1.stage, Number(a1.capture_score), Number(a1.score) > 0], ["shortlisted", 8, true]);
-  assert.deepEqual([b1.stage, b1.filter_reason, Number(b1.capture_score)], ["filtered_out", "captures_well", 88], "50 for speed, 20 for the reply, 10 for following up, 8 for routes");
-  assert.deepEqual(out.data.tally.filtered_out, { captures_well: 1 });
+  assert.deepEqual([b1.stage, b1.filter_reason, Number(b1.capture_score)], ["shortlisted", null, 88], "everyone tested is shown (owner, 18 Nov 2026): 50 for speed, 20 for the reply, 10 for following up, 8 for routes");
+  assert.deepEqual(out.data.tally.filtered_out, {});
   assert.doesNotMatch(out.body, /No enquiry was 24 hours old/);
   for (const part of [
     "## 1. Fixture Alpha Dental", "**Capture score: 8 out of 100, measured on 4 of 6 parts**",
@@ -478,10 +481,10 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
   const order = ["**Profile**", "**Capture score:", "**Against local competitors", "**Why they can afford it**", "**Who to speak to, and how**", "**The reply our agent would have sent", "**First message, to send by hand", "**Call opener**", "Fit score:"].map((part) => out.body.indexOf(part));
   assert.deepEqual(order, [...order].sort((p, q) => p - q), "the card's parts come in the order asked for");
   assert.ok(order.every((i) => i > 0));
-  const draftRequest = t.requests.filter((r) => r.stage === "draft").at(-1);
+  const draftRequest = t.requests.filter((r) => r.stage === "draft").find((r) => r.user.includes("Nobody replied in the first 24 hours."));
   assert.ok(draftRequest.user.includes("A TEST ENQUIRY WAS SENT") && draftRequest.user.includes("Nobody replied in the first 24 hours.") && draftRequest.user.includes(GOOD.body));
   assert.ok(!/£|13,500|leak/i.test(draftRequest.user), "the drafting model is never given the estimate");
-  assert.deepEqual(out.data.cards.map((c) => [c.prospect_id, c.capture_score, c.reissue, c.estimated_leak]), [[alpha.id, 8, false, { low: 600, high: 13500 }]]);
+  assert.deepEqual(out.data.cards.map((c) => [c.prospect_id, c.capture_score, c.reissue, c.estimated_leak]), [[alpha.id, 8, false, { low: 600, high: 13500 }], [beta.id, 88, false, null]], "worst first; the one that answered well is shown too (owner, 18 Nov 2026)");
   // its rival is now put forward for the same kind of enquiry, and still needs a yes
   list = await enquiries(x);
   assert.deepEqual(list.map((e) => [e.name, e.purpose, e.status]), [["Fixture Alpha Dental", "prospect", "sent"], ["Fixture Beta Dental", "prospect", "sent"], ["Fixture Zeta Dental", "rival", "proposed"]]);
@@ -504,16 +507,17 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
   x.w.clock.advance(20 * HOUR);
   await run(x);
   out = await lastOutput(x);
-  assert.deepEqual([out.data.tally.reissued, out.data.tally.shortlisted, out.data.cards.map((c) => [c.prospect_id, c.reissue])], [1, 0, [[alpha.id, true]]]);
+  assert.ok(out.data.cards.some((c) => c.prospect_id === alpha.id && c.reissue === true), "alpha's card is issued again with its rival's result");
+  assert.ok(out.data.tally.reissued >= 1 && out.data.cards.filter((c) => !c.reissue).every((c) => c.prospect_id !== alpha.id), "the rival, tested now, gets its own card too (owner, 18 Nov 2026: everyone tested is shown)");
   for (const part of [
-    "## 1. Fixture Alpha Dental (issued again: rivals' results are in)", "**Against local competitors**",
+    "Fixture Alpha Dental (issued again: rivals' results are in)", "**Against local competitors**",
     "| Reply to the test enquiry | no reply from a person | a person replied in 10 minutes | Not tested yet | a person replied in 20 minutes |",
     // a "yes" whose sentence is not in the reply is not a yes: that part is left out, 42 + 0 + 8 of 80
     `| Capture score | 8 out of 100 | 88 out of 100 | Not tested yet | ${Math.round((50 / 80) * 100)} out of 100 |`,
-    "Shortlisted: 0, and 1 issued again with rivals' results",
+    "Shortlisted: 1, and 2 issued again with rivals' results",
   ]) assert.ok(out.body.includes(part), `the reissued card is missing "${part}"\n${out.body}`);
   const z = await prospectOf(zeta.id);
-  assert.deepEqual([z.stage, z.filter_reason, Number(z.capture_score)], ["filtered_out", "captures_well", 63], "the rival is judged in its own right too: it replied quickly, so it is a comparison and not a prospect");
+  assert.deepEqual([z.stage, z.filter_reason, Number(z.capture_score)], ["shortlisted", null, 63], "the rival is judged in its own right too and, like everyone tested, shown (owner, 18 Nov 2026)");
   const a2 = await prospectOf(alpha.id);
   assert.deepEqual([a2.card.rivals_pending, a2.card.reissued, a2.stage], [false, true, "shortlisted"]);
   // and once more, later: nothing further is issued or proposed
@@ -530,7 +534,7 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
     prospect: { proposed: 2, approved: 2, rejected: 0, sent: 2, replied_person: 1, replied_automatic: 1, no_reply: 0, scored: 2 },
     rival: { proposed: 1, approved: 1, rejected: 0, sent: 1, replied_person: 1, replied_automatic: 0, no_reply: 0, scored: 1 },
   });
-  assert.equal(stats.stages.shortlisted, 2);
+  assert.equal(stats.stages.shortlisted, 4, "everyone tested is shortlisted (owner, 18 Nov 2026)");
   // every model call was paid for on a run of this room
   const triggers = (await rows(h, "select distinct trigger from runs where tenant_id = $1 order by trigger", [x.w.tenantId])).map((r) => r.trigger);
   assert.ok(triggers.includes("outreach:enquiries") && triggers.includes("outreach:replies") && triggers.includes("outreach:draft"), JSON.stringify(triggers));
@@ -714,6 +718,9 @@ test("a reply that asks not to be contacted adds a suppression at once, and the 
     hooks: { reply: async (request) => ({
       from_a_person: !request.user.includes("ticket number"), asks_not_to_be_contacted: request.user.includes("take us off"),
       answered_the_question: { value: false, quote: null }, offered_a_next_step: { value: false, quote: null },
+      // the reader agrees, and points at the sentence
+      complains_about_being_contacted: request.user.includes("Please do not contact us again.") ? { value: true, quote: "Please do not contact us again." }
+        : request.user.includes("take us off") ? { value: true, quote: "Hello, kindly take us off whatever this is." } : { value: false, quote: null },
     }) },
   });
   const { x, mailbox } = t;
@@ -770,11 +777,13 @@ test("the shortlist rule: capture at or below the threshold and fit; a low estim
   const out = await lastOutput(x);
   assert.equal(out.data.tally.scored_after_test, 3);
   const [p1, p2, p3] = [await prospectOf(cheap.id), await prospectOf(unpriced.id), await prospectOf(slowish.id)];
-  assert.deepEqual([p1.stage, p1.filter_reason, Number(p1.capture_score)], ["filtered_out", "estimated_leak_below_threshold", 8]);
+  assert.deepEqual([p1.stage, p1.filter_reason, Number(p1.capture_score)], ["shortlisted", null, 8], "a low leak estimate no longer keeps anyone off (owner, 18 Nov 2026)");
   assert.deepEqual([p2.stage, Number(p2.capture_score)], ["shortlisted", 8]);
   // five hours, the same day in London: 22 + 0 + 0 + 8 of 100
   assert.deepEqual([p3.stage, Number(p3.capture_score)], ["shortlisted", 30]);
-  assert.deepEqual(out.data.cards.map((c) => [c.prospect_id, c.capture_score, c.estimated_leak]), [[unpriced.id, 8, null], [slowish.id, 30, { low: 800, high: 18000 }]], "the weakest at capturing comes first");
+  const cardsBy = Object.fromEntries(out.data.cards.map((c) => [c.prospect_id, [c.capture_score, c.estimated_leak]]));
+  assert.deepEqual([cardsBy[cheap.id], cardsBy[unpriced.id], cardsBy[slowish.id]], [[8, { low: 20, high: 450 }], [8, null], [30, { low: 800, high: 18000 }]], "everyone tested gets a card, a low estimate too (owner, 18 Nov 2026)");
+  assert.equal(out.data.cards.at(-1).prospect_id, slowish.id, "the weakest at capturing comes first");
   assert.match(out.body, /\*\*Estimated leak: no figure\.\*\* The business does not publish a price for its highest value service, so no estimate can be made\./);
   assert.match(out.body, /- A person replied 2026-11-16 15:00 UTC: "Hello\. Please telephone the practice\."/);
   assert.deepEqual(p3.capture_breakdown.parts.map((part) => part.points), [22, 0, 0, 8, null, null]);
@@ -1481,22 +1490,22 @@ test("nobody named and no confirmed company do not stop a test; Companies House 
   x.w.clock.advance(25 * HOUR);
   await run(x);
 
-  assert.deepEqual([...lookups].sort(), ["Fixture Alpha Dental", "Fixture Delta Dental", "Fixture Epsilon Dental", "Fixture Gamma Dental"], "asked about the four that scored low, and not about the one that answered well");
+  assert.deepEqual([...lookups].sort(), ["Fixture Alpha Dental", "Fixture Beta Dental", "Fixture Delta Dental", "Fixture Epsilon Dental", "Fixture Gamma Dental"], "everyone tested is looked up (owner, 18 Nov 2026), the one that answered well too");
   const state = async (c) => { const p = await prospectOf(c.id); return [p.stage, p.filter_reason, p.is_limited_company, p.contact_name]; };
   assert.deepEqual(await state(alpha), ["shortlisted", null, "yes", "Dana Fixture-Director"], "a director's name from the register fills the gap");
   assert.deepEqual(await state(epsilon), ["shortlisted", null, "yes", null], "a limited company with nobody named is still a prospect");
-  assert.deepEqual(await state(gamma), ["filtered_out", "limited_company_not_confirmed", "not_found", "Fixture gamma Owner"], "after the test, a limited company is required");
-  assert.deepEqual(await state(delta), ["filtered_out", "not_limited_company", "no", "Fixture delta Owner"]);
-  assert.deepEqual((await state(beta)).slice(0, 3), ["filtered_out", "captures_well", "not_checked"]);
+  assert.deepEqual(await state(gamma), ["shortlisted", null, "not_found", "Fixture gamma Owner"], "no company filter after the test any more (owner, 18 Nov 2026)");
+  assert.deepEqual(await state(delta), ["shortlisted", null, "no", "Fixture delta Owner"]);
+  assert.deepEqual((await state(beta)).slice(0, 2), ["shortlisted", null]);
   const out = await lastOutput(x);
-  assert.deepEqual(out.data.cards.map((c) => c.prospect_id).sort(), [alpha.id, epsilon.id].sort());
+  assert.deepEqual(out.data.cards.map((c) => c.prospect_id).sort(), [alpha.id, beta.id, gamma.id, delta.id, epsilon.id].sort());
   assert.match(out.body, /Fixture Epsilon Dental[\s\S]*- Who: no named person found: ask for the owner or the practice manager/);
   assert.match(out.body, /Fixture Alpha Dental[\s\S]*- Who: Dana Fixture-Director, Director \(Companies House register\) \(source: https:\/\/find-and-update\.company-information\.service\.gov\.uk\/company\/01111111\)/);
   assert.match(out.body, /- Limited company: yes, FIXTURE EPSILON DENTAL LIMITED \(05555555\)/);
   // the drafting model is told there is nobody to address by name
   const draftFor = t.requests.filter((r) => r.stage === "draft").find((r) => r.user.includes("Business: Fixture Epsilon Dental"));
   assert.ok(draftFor.user.includes("Person to address: not found. No person is named, so address nobody by name: the message asks for the owner or the practice manager"));
-  assert.deepEqual(out.data.tally.filtered_out, { captures_well: 1, limited_company_not_confirmed: 1, not_limited_company: 1 });
+  assert.deepEqual(out.data.tally.filtered_out, {});
 });
 
 test("restore-filtered: businesses dropped before testing for want of a name or a confirmed company go back to be tested; nothing else is touched", async () => {
@@ -1806,8 +1815,11 @@ test("circuit breakers: too many failed sends, a complaint, or the mailbox refus
 
   // ---- a reply that reads as a complaint ----
   for (const text of ["This is spam. How did you get this address?", "Unsolicited. I will report this to the ICO.", "Stop emailing us.", "Please remove us from your list"]) assert.equal(readsAsComplaint(text), true, text);
+  // a firm's standard footer is full of words that are not a complaint about this message
+  for (const text of ["For our complaints procedure see our website.", "We comply with data protection law (GDPR). Registered with the ICO.", "We do not give prices by email, please call us on 0121 496 0000."]) assert.equal(readsAsComplaint(text), false, text);
   for (const text of ["Hello, implants are from a fixture price. Do call us.", "Thanks for getting in touch! We have a consultation on Thursday."]) assert.equal(readsAsComplaint(text), false, text);
-  const b = await house({ rung: 3, hooks: { reply: async () => ({ from_a_person: true, asks_not_to_be_contacted: false, answered_the_question: { value: false, quote: null }, offered_a_next_step: { value: false, quote: null } }) } });
+  const b = await house({ rung: 3, hooks: { reply: async () => ({ from_a_person: true, asks_not_to_be_contacted: false, answered_the_question: { value: false, quote: null }, offered_a_next_step: { value: false, quote: null },
+    complains_about_being_contacted: { value: true, quote: "This is unsolicited spam." } }) } });
   const first = await clinic(b, "alpha");
   await run(b.x);
   assert.equal(b.mailbox.sent.length, 1);
@@ -1815,15 +1827,14 @@ test("circuit breakers: too many failed sends, a complaint, or the mailbox refus
   const second = await clinic(b, "beta");
   b.x.w.clock.advance(HOUR);
   await run(b.x);
-  assert.deepEqual([b.mailbox.sent.length, (await enquiries(b.x)).find((e) => e.prospect_id === second.id).status], [1, "queued"], "after a complaint nothing more goes out that day");
-  out = await lastOutput(b.x);
-  assert.match(out.body, /\*\*SENDING IS STOPPED FOR TODAY: a reply read as a complaint about being contacted\.\*\*/);
-  assert.deepEqual((await rows(h, "select kind, value_key, source from suppressions where tenant_id = $1 order by 1, 2", [b.x.w.tenantId])).map((r) => [r.kind, r.value_key, r.source]),
-    [["domain", "fixture-alpha.example.test", "opt_out"], ["email", first.email, "opt_out"]], "and the business that complained is never written to again");
-  b.x.w.clock.advance(24 * HOUR);
   b.x.runtime.sendDue();
   await b.x.runtime.idle();
-  assert.equal(b.mailbox.sent.length, 2);
+  assert.deepEqual([b.mailbox.sent.length, (await enquiries(b.x)).find((e) => e.prospect_id === second.id).status], [2, "sent"], "one complaint does not stop sending (owner's decision)");
+  out = await lastOutput(b.x);
+  assert.doesNotMatch(out.body, /SENDING IS STOPPED/);
+  assert.match(out.body, /\*\*Complaints today: 1\.\*\* Each business below is never written to again\. Sending carries on\./);
+  assert.deepEqual((await rows(h, "select kind, value_key, source from suppressions where tenant_id = $1 order by 1, 2", [b.x.w.tenantId])).map((r) => [r.kind, r.value_key, r.source]),
+    [["domain", "fixture-alpha.example.test", "opt_out"], ["email", first.email, "opt_out"]], "and the business that complained is never written to again");
 
   // ---- the mailbox refuses the login ----
   const c = await house({ rung: 3 });
@@ -1996,7 +2007,7 @@ test("an evening enquiry is not scored until the next working day has ended, its
   x.w.clock.advance(18 * HOUR);
   await run(x);
   let out = await lastOutput(x);
-  assert.deepEqual([out.data.tally.scored_after_test, out.data.enquiries.sent_awaiting, (await prospectOf(alpha.id)).capture_score, (await prospectOf(gamma.id)).filter_reason], [1, 2, null, "captures_well"]);
+  assert.deepEqual([out.data.tally.scored_after_test, out.data.enquiries.sent_awaiting, (await prospectOf(alpha.id)).capture_score, (await prospectOf(gamma.id)).filter_reason], [1, 2, null, null]);
   // Tuesday 17:45: the working day has ended, but 24 hours have not passed: still waiting
   x.w.clock.advance(5 * HOUR + 45 * MINUTE);
   await run(x);
@@ -2007,7 +2018,7 @@ test("an evening enquiry is not scored until the next working day has ended, its
   out = await lastOutput(x);
   assert.equal(out.data.tally.scored_after_test, 2);
   const a = await prospectOf(alpha.id);
-  assert.deepEqual([a.stage, Number(a.capture_score), (await prospectOf(beta.id)).filter_reason], ["shortlisted", 8, "captures_well"]);
+  assert.deepEqual([a.stage, Number(a.capture_score), (await prospectOf(beta.id)).filter_reason], ["shortlisted", 8, null]);
   for (const part of [
     "- Sent Monday 18:00, their opening hours are not known (on a weekday evening)",
     "- reply speed: 0 of 50. Sent while they were shut. Nothing useful came back in the time allowed. No person replied in the time allowed.",
@@ -2022,7 +2033,7 @@ test("an evening enquiry is not scored until the next working day has ended, its
   // the evening rival that answered in ten minutes scored full marks for speed
   assert.deepEqual((await prospectOf(beta.id)).capture_breakdown.parts[0].points, 50);
   // the drafting model is told when it was sent
-  assert.ok(t.requests.filter((r) => r.stage === "draft").at(-1).user.includes("Sent Monday 18:00, their opening hours are not known (on a weekday evening)."));
+  assert.ok(t.requests.filter((r) => r.stage === "draft").some((r) => r.user.includes("Sent Monday 18:00, their opening hours are not known (on a weekday evening).")));
 });
 
 test("the day's allowance is shared evenly across the kinds of business, and a kind with fewer ready passes its share on", async () => {
@@ -2290,6 +2301,15 @@ test("the Gmail API transport: HTTPS only, the same three things as the mailbox 
   // Google was reached and refused the message itself: it may or may not have gone, so it is a failed send with its code
   const refused = fresh((u) => (u.pathname.endsWith("/messages/send") ? new Response(JSON.stringify({ error: { message: "SECRET-BODY" } }), { status: 500 }) : null));
   await assert.rejects(refused.send(mail), (err) => err.code === "mail_send_failed" && err.networkCode === "HTTP_500" && !err.message.includes("SECRET"));
+  // Gmail saying "too many calls" (403 with a rate-limit reason, or 429) is NOT a refused login: it must never stop sending for the day
+  const query = { messageId: "<x@fixture.example.test>", address: "hello@fixture-alpha.example.test", ownDomain: null, since: new Date("2026-11-16T09:00:00Z") };
+  for (const [status, body] of [[403, { error: { status: "PERMISSION_DENIED", errors: [{ reason: "userRateLimitExceeded" }], message: "SECRET" } }], [403, { error: { status: "RESOURCE_EXHAUSTED", message: "SECRET" } }], [429, { error: { message: "SECRET" } }]]) {
+    const busy = fresh((u) => (u.host === "gmail.googleapis.com" ? new Response(JSON.stringify(body), { status }) : null));
+    await assert.rejects(busy.findReplies(query), (err) => !(err instanceof MailboxLoginError) && err.networkCode === "RATE_LIMITED" && !err.message.includes("SECRET"), `${status}`);
+  }
+  // a 403 that is really "not allowed" is still a refused login
+  const denied = fresh((u) => (u.host === "gmail.googleapis.com" ? new Response(JSON.stringify({ error: { errors: [{ reason: "insufficientPermissions" }] } }), { status: 403 }) : null));
+  await assert.rejects(denied.findReplies(query), (err) => err instanceof MailboxLoginError);
 
   // ---- which transport, from the environment ----
   const env = { TEST_MAILBOX_ADDRESS: "fixture-test-mailbox@example.test", TEST_MAILBOX_APP_PASSWORD: "fixture-app-password", GMAIL_OAUTH_CLIENT_ID: "c", GMAIL_OAUTH_CLIENT_SECRET: "s", GMAIL_OAUTH_REFRESH_TOKEN: "r" };
@@ -2360,4 +2380,307 @@ test("a default that has changed in code reaches settings stored with the old de
   const other = parseOutreachSettings({ enquiry_send_from: "08:00", enquiry_send_until: "20:00", working_hours_until: "18:00", enquiry_slots: ["in_hours", "evening"], enquiry_send_days: [1, 2, 3, 4, 5], non_working_dates: ["2026-12-25"] });
   assert.equal(sendingWindows(other), "They go Monday to Friday between 08:00 and 20:00, each in its own slot: working hours (09:00 to 18:00, Monday to Friday); evenings (18:00 to 20:00 on the same days).");
   assert.ok(!/09:00 and 17:30/.test(sendingWindows(S)), "not the old window");
+});
+
+// ---- a complaint needs a real complaint ----
+
+const SOLICITOR_REPLY = `Dear Salekh,
+
+Thank you for your enquiry. Our fixed fee for conveyancing on a purchase is from a fixture price plus VAT and disbursements. We could speak to you tomorrow afternoon.
+
+Kind regards,
+
+Jo Fixture-Paralegal
+Fixture Law LLP
+
+This email and any attachments are confidential and intended solely for the addressee. If you have received this email in error please notify the sender and do not contact any other person about its contents. Fixture Law LLP is authorised and regulated by the Solicitors Regulation Authority. Our complaints procedure and privacy notice (data protection, GDPR) are on our website. Please do not email us again at this address to report spam: use the form.
+
+From: Salekh <fixture-test-mailbox@example.test>
+Sent: 17 November 2026 10:34
+To: Fixture Law <hello@fixture-lexa.example.test>
+Subject: Conveyancing fees?
+
+> Hello,
+> Could you give me a rough idea of your conveyancing fees? Stop emailing me if this is spam.
+> Thanks,
+> Salekh`;
+
+test("only a reply's own words are judged: quoted text, the signature and a firm's standard footer are taken off first", () => {
+  const own = ownWords(SOLICITOR_REPLY);
+  assert.equal(own, "Dear Salekh,\n\nThank you for your enquiry. Our fixed fee for conveyancing on a purchase is from a fixture price plus VAT and disbursements. We could speak to you tomorrow afternoon.\n\nKind regards,");
+  assert.ok(readsAsComplaint(SOLICITOR_REPLY), "the whole email, footer and quoted enquiry included, would have tripped the phrase list");
+  assert.equal(readsAsComplaint(own), false, "its own words do not");
+  assert.equal(asksNotToBeContacted(own), false);
+  // the usual shapes of quoted text
+  assert.equal(ownWords("Hi, implants are from a fixture price.\n\nOn Tue, 17 Nov 2026 at 10:34, Salekh <x@example.test> wrote:\n> spam spam"), "Hi, implants are from a fixture price.");
+  assert.equal(ownWords("Please call us.\n\n-----Original Message-----\nFrom: Salekh\nunsolicited"), "Please call us.");
+  assert.equal(ownWords("We can see you Thursday.\n-- \nSam\nReport spam to us"), "We can see you Thursday.");
+  assert.equal(ownWords("Thanks for getting in touch.\n\nSent from my iPhone"), "Thanks for getting in touch.");
+  // a footer with no sign-off before it
+  assert.equal(ownWords("Fees are from a fixture price.\n\nCONFIDENTIALITY NOTICE: this message is intended for the recipient only. Do not contact us about spam."), "Fees are from a fixture price.");
+  // a real complaint survives all of that
+  assert.equal(ownWords("This is unsolicited. Stop emailing us.\n\nRegards,\nSam"), "This is unsolicited. Stop emailing us.\n\nRegards,");
+  assert.equal(ownWords(""), "");
+});
+
+test("a complaint needs both a phrase in the reply's own words and the reader's agreement with a sentence that is really there; the sentence is kept, shown with the business, and the owner can lift the stop once", async () => {
+  // what the reply reader says, per business: set by each case below
+  const says = {};
+  const t = await house({ rung: 3, server: true, hooks: { reply: async (request) => {
+    const key = Object.keys(says).find((k) => request.user.includes(k));
+    return { from_a_person: true, asks_not_to_be_contacted: false, answered_the_question: { value: false, quote: null }, offered_a_next_step: { value: false, quote: null }, complains_about_being_contacted: says[key] ?? { value: false, quote: null } };
+  } } });
+  const { x, mailbox } = t;
+  const made = {};
+  for (const key of ["alpha", "beta", "gamma", "delta", "epsilon"]) made[key] = await clinic(t, key);
+  await run(x);
+  assert.equal(mailbox.sent.length, 5);
+  const reply = (key, text) => mailbox.deliver({ from: made[key].email, receivedAt: new Date(x.w.clock.now().getTime() + 20 * MINUTE), inReplyTo: mailbox.to(made[key].email).messageId, text });
+  // 1. a solicitor's ordinary reply, with its footer and the quoted enquiry: the reader is even told (wrongly) it is a complaint
+  says["Our fixed fee for conveyancing"] = { value: true, quote: "do not contact any other person about its contents" };
+  reply("alpha", SOLICITOR_REPLY);
+  // 2. declines to price by email: not a complaint, whatever the reader says
+  says["do not give prices by email"] = { value: true, quote: "We do not give prices by email, please call us." };
+  reply("beta", "Hello,\n\nWe do not give prices by email, please call us.\n\nThanks,\nReception");
+  // 3. the phrase is there, but the reader does not agree
+  says["spam folder"] = { value: false, quote: null };
+  reply("gamma", "Sorry for the delay, your message went to our spam folder! Implants are from a fixture price.");
+  // 4. the phrase is there and the reader agrees, but with a sentence that is not in the reply
+  says["how did you get this address, out of interest"] = { value: true, quote: "They are furious and want this to stop." };
+  reply("delta", "Happy to help, but how did you get this address, out of interest? It is our accounts inbox.");
+  x.w.clock.advance(HOUR);
+  assert.deepEqual(await x.runtime.collectReplies(), { enquiriesChecked: 5, person: 4, automatic: 0, optedOut: 0, bounced: 0, complaints: 0 });
+  assert.ok(!(await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId })).some((e) => (e.reasonCode ?? "").startsWith("enquiry_breaker")), "four ordinary replies, and sending is not stopped");
+  assert.deepEqual(await rows(h, "select 1 from suppressions where tenant_id = $1", [x.w.tenantId]), []);
+  // the reader was given the reply's own words only
+  const read = t.requests.filter((r) => r.stage === "reply").find((r) => r.user.includes("Our fixed fee for conveyancing"));
+  assert.ok(!read.user.includes("confidential") && !read.user.includes("complaints procedure") && !read.user.includes("Stop emailing me if this is spam"));
+
+  // 5. a real one: both agree
+  says["This is unsolicited"] = { value: true, quote: "This is unsolicited and we did not ask for it." };
+  reply("epsilon", "This is unsolicited and we did not ask for it. Stop emailing us.\n\nRegards,\nSam Fixture-Owner\nFixture Epsilon Dental");
+  x.w.clock.advance(HOUR);
+  assert.deepEqual(await x.runtime.collectReplies(), { enquiriesChecked: 5, person: 1, automatic: 0, optedOut: 1, bounced: 0, complaints: 1 });
+  const stored = (await prospectOf(made.epsilon.id)).test_result.replies[0];
+  assert.deepEqual([stored.complaint_sentence, stored.opt_out], ["This is unsolicited and we did not ask for it.", true], "the sentence is kept with the reply, on the prospect");
+  const next = await clinic(t, "zeta");
+  await run(x);
+  const out = await lastOutput(x);
+  assert.match(out.body, /\*\*Complaints today: 1\.\*\* Each business below is never written to again\. Sending carries on\.\n- From \*\*Fixture Epsilon Dental\*\*: "This is unsolicited and we did not ask for it\."/);
+  assert.doesNotMatch(out.body, /SENDING IS STOPPED/, "one complaint never stops sending");
+  // the events hold the stop and nothing of the reply
+  assert.ok(!JSON.stringify(await rows(h, "select * from events where tenant_id = $1", [x.w.tenantId])).includes("unsolicited and we did not ask"));
+
+  // ---- what came back, to read afterwards ----
+  const listed = await x.call("GET", `/v1/rooms/${ROOM}/replies`);
+  assert.equal(listed.status, 200);
+  const byBusiness = Object.fromEntries(listed.body.replies.map((r) => [r.business.split(" ")[1], r]));
+  assert.deepEqual(Object.keys(byBusiness).sort(), ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
+  assert.deepEqual([byBusiness.Alpha.text, byBusiness.Alpha.from, byBusiness.Alpha.useful, byBusiness.Alpha.flags, byBusiness.Alpha.complaintSentence, byBusiness.Alpha.kind], [
+    "Dear Salekh,\n\nThank you for your enquiry. Our fixed fee for conveyancing on a purchase is from a fixture price plus VAT and disbursements. We could speak to you tomorrow afternoon.\n\nKind regards,",
+    "person", true, { answered: false, offeredNextStep: false, askedNotToBeContacted: false, complaint: false, matchedBy: "header" }, null, "clinics",
+  ], "the reply's own words, with the quoted enquiry, the signature and the footer taken off");
+  assert.deepEqual([byBusiness.Epsilon.flags.complaint, byBusiness.Epsilon.flags.askedNotToBeContacted, byBusiness.Epsilon.complaintSentence], [true, true, "This is unsolicited and we did not ask for it."]);
+  assert.equal((await x.call("GET", `/v1/rooms/${ROOM}/replies?since=2030-01-01T00:00:00Z`)).body.replies.length, 0);
+  assert.equal((await x.call("GET", `/v1/rooms/${ROOM}/replies?since=whenever`)).status, 422);
+  assert.equal((await x.call("GET", `/v1/rooms/${ROOM}/replies`, undefined, null)).status, 401);
+  assert.equal((await x.call("GET", "/v1/rooms/fixture-floor-one:nowhere/replies")).status, 404);
+  assert.ok(!JSON.stringify((await x.call("GET", "/v1/house")).body).includes("unsolicited"));
+
+  // ---- the owner's switch: lift the stop for a day, once ----
+  assert.equal(await x.runtime.clearStop("2026-11-16"), false, "one complaint stopped nothing: nothing to lift");
+  x.runtime.sendDue();
+  await x.runtime.idle();
+  const sentBefore = mailbox.sent.length;
+  // a real stop (the mailbox refuses the login), then the owner lifts it once
+  const more = await clinic(t, "eta");
+  mailbox.loginFails = true;
+  await proposeEnquiry(h.gatewayDb, x.runtime.gateway, t.scope, (await prospectsByIds(h.gatewayDb, t.scope, [more.id]))[0], GOOD, x.w.clock.now(), "prospect", "dental implants", "in_hours");
+  x.runtime.sendDue();
+  await x.runtime.idle();
+  assert.equal(await x.runtime.clearStop("2026-11-15"), false, "not today: nothing to lift");
+  mailbox.loginFails = false;
+  assert.equal(await x.runtime.clearStop("2026-11-16"), true);
+  x.runtime.sendDue();
+  await x.runtime.idle();
+  assert.equal(mailbox.sent.length, sentBefore + 1, "sending goes on the same day");
+  assert.ok((await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId })).some((e) => e.summary === "The stop on sending was lifted by the owner, through the server's settings"));
+  assert.equal(await x.runtime.clearStop("2026-11-16"), false, "a stop already lifted is not lifted again");
+});
+
+// ---- results within minutes of being due ----
+
+test("an enquiry is scored on the ten minute round as soon as its wait has ended, into one 'Results so far' a day that is brought up to date; the morning run then cards it", async () => {
+  const t = await house({ rung: 3, hooks: { reply: async () => ({ from_a_person: true, asks_not_to_be_contacted: false, answered_the_question: { value: true, quote: "Implants are from a fixture price." }, offered_a_next_step: { value: false, quote: null } }) } });
+  const { x, mailbox } = t;
+  const alpha = await clinic(t, "alpha", { price: 3000 });
+  await run(x);                                   // Monday 10:00: alpha is sent
+  x.w.clock.advance(34 * MINUTE);
+  const beta = await clinic(t, "beta");
+  await proposeEnquiry(h.gatewayDb, x.runtime.gateway, t.scope, (await prospectsByIds(h.gatewayDb, t.scope, [beta.id]))[0], GOOD, x.w.clock.now(), "prospect", "dental implants", "in_hours");
+  x.runtime.sendDue();
+  await x.runtime.idle();                         // Monday 10:34: beta is sent
+  assert.equal(mailbox.sent.length, 2);
+  mailbox.deliver({ from: beta.email, receivedAt: new Date(x.w.clock.now().getTime() + 5 * MINUTE), inReplyTo: mailbox.to(beta.email).messageId, text: "Hello. Implants are from a fixture price." });
+  const outputs = () => rows(h, "select output_id, title, body, data from outputs where tenant_id = $1 and title like 'Results so far%' order by created_at", [x.w.tenantId]);
+
+  // Tuesday 09:55: nothing has had its 24 hours
+  x.w.clock.advance(23 * HOUR + 21 * MINUTE);
+  await x.runtime.collectReplies();
+  assert.deepEqual([await outputs(), (await prospectOf(alpha.id)).capture_score], [[], null]);
+  // Tuesday 10:05: alpha has. It is scored now, not at tomorrow's 08:00 run.
+  x.w.clock.advance(10 * MINUTE);
+  await x.runtime.collectReplies();
+  let list = await outputs();
+  assert.deepEqual([list.length, list[0].title, Number((await prospectOf(alpha.id)).capture_score), (await prospectOf(alpha.id)).stage, (await prospectOf(beta.id)).capture_score], [1, "Results so far, 2026-11-17", 8, "tested", null]);
+  assert.match(list[0].body, /1 so far today\.[\s\S]*## Everyone tested: 1, worst first[\s\S]*- \*\*Fixture Alpha Dental\*\* \(clinics\): capture 8 out of 100; sent Monday 10:00 \(in working hours\)\. No reply from a person within 24 hours\.[\s\S]*## Left off: 0\n\n- none yet/);
+  assert.deepEqual(list[0].data, { date: "2026-11-17", results: [{ prospect_id: alpha.id, kind: "clinics", capture_score: 8, outcome: "prospect" }] });
+  const firstId = list[0].output_id;
+  // a round on which nothing new is due writes nothing
+  x.w.clock.advance(10 * MINUTE);
+  assert.equal(await x.runtime.scoreDue(), 0);
+  // Tuesday 10:40: beta has. The same output is brought up to date: one a day, not one a round.
+  x.w.clock.advance(25 * MINUTE);
+  await x.runtime.collectReplies();
+  list = await outputs();
+  assert.deepEqual([list.length, list[0].output_id, list[0].data.results.length], [1, firstId, 2]);
+  assert.match(list[0].body, /2 so far today\.[\s\S]*## Everyone tested: 2, worst first[\s\S]*\*\*Fixture Alpha Dental\*\*[\s\S]*- \*\*Fixture Beta Dental\*\* \(clinics\): capture \d+ out of 100; sent Monday 10:34 \(in working hours\)\. A person replied in 5 minutes\.[\s\S]*## Left off: 0/);
+  assert.equal((await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId })).filter((e) => e.type === "output").length, 2, "the first shortlist, and the results once: bringing them up to date is not a new piece of work");
+  // nothing personal beyond the business's name is in it
+  assert.ok(!list[0].body.includes("@") && !list[0].body.includes("Implants are from a fixture price"));
+
+  // Wednesday 08:00: the morning run cards the one scored between runs, and does not say nothing was due
+  x.w.clock.advance(21 * HOUR + 20 * MINUTE);
+  await run(x);
+  const out = await lastOutput(x);
+  assert.equal(out.title, "Shortlist, 2026-11-18");
+  assert.deepEqual([out.data.cards.map((c) => [c.prospect_id, c.capture_score])[0], out.data.tally.scored_after_test], [[alpha.id, 8], 0], "worst first");
+  assert.ok(out.body.includes("## 1. Fixture Alpha Dental") && !out.body.includes("No enquiry was 24 hours old on this run"));
+  assert.equal((await prospectOf(alpha.id)).stage, "shortlisted");
+});
+
+// ---- a kind that produces nothing must be seen ----
+
+test("a long backlog of one kind cannot starve the others: each kind keeps its share of the batch, and the shortlist says what every kind came to", async () => {
+  const some = (kind, n) => Array.from({ length: n }, (_, i) => toPlace({ ...rawPlace(`${kind}${String.fromCharCode(97 + i)}`), id: `place-${kind}-${i}`, displayName: { text: `Fixture ${kind} ${i}` }, websiteUri: `https://fixture-${kind}${String.fromCharCode(97 + i)}.example.test/` }));
+  const asked = [];
+  const places = { searchText: async (search) => { asked.push(search.query); return { places: search.query.startsWith("kitchen fitters") ? some("trade", 20) : [], nextPageToken: null }; } };
+  const reach = pageReach();
+  const t = await house({ places, reach, hooks: { analyse: async (request) => {
+    const none = { value: null, page: null };
+    const trade = /^Business: Fixture trade/.test(request.user);
+    return { is_match: true, what_they_sell: { value: trade ? "Fixture fitted kitchens" : "Fixture dentistry", page: 1 }, highest_value_service: { value: trade ? "Fixture kitchens" : "Fixture implants", page: 1 }, highest_value_price: none,
+      staff_count: none, locations: none, opening_hours: none, part_of_group: none, legal_form: none, reviews: { count: null, rating: null, page: null }, contact_person: { name: null, role: null, page: null }, signals: [] };
+  }, enquiry: async (request) => (request.user.includes("a new fitted kitchen") ? { subject: "Cost of a fitted kitchen", body: "Hi,\n\nRoughly what does a new fitted kitchen cost, and how soon could a survey be done?\n\nThanks,\nSalekh" } : undefined) },
+    settings: { find_per_run: 12, business_types: [{ id: "clinics" }, { id: "trades" }, { id: "accountants" }] } });
+  const { x } = t;
+  // as on the server: thirty clinics found on earlier runs and never analysed
+  for (let i = 0; i < 30; i += 1) {
+    await recordProspect(h.gatewayDb, t.scope, { name: `Fixture Backlog Clinic ${i}`, website: `https://fixture-backlog${String.fromCharCode(97 + (i % 26))}${i}.example.test/`, area: "Fixtureton", signal: "none", source_url: "https://fixture-backlog.example.test/" }, { now: x.w.clock.now(), searchArea: "Fixtureton" });
+  }
+  await run(x);
+  const out = await lastOutput(x);
+  assert.deepEqual(out.data.by_kind, { clinics: { found: 0, analysed: 8, testable: 8, queued: 8 }, trades: { found: 8, analysed: 4, testable: 4, queued: 4 } },
+    "a batch of twelve between three kinds is four each. The clinics' backlog took its four and no more, so the trades were looked for and analysed the same run. The accountants found nothing, and their four were passed on");
+  assert.ok(asked.includes("kitchen fitters in Fixtureton") && asked.includes("accountants for small businesses in Fixtureton"), "the other kinds were searched although thirty clinics were waiting");
+  assert.ok(!out.body.includes("filled this run's batch"));
+  assert.match(out.body, /By kind of business, this run \(found \/ analysed \/ ready to test by email \/ enquiries drafted\):\n- clinics: 0 \/ 8 \/ 8 \/ 8\n- trades: 8 \/ 4 \/ 4 \/ 4\n- accountants: 0 \/ 0 \/ 0 \/ 0 {2}<- NOTHING this run/);
+  assert.equal(out.data.waiting_for_analysis, 26, "the rest wait their turn: twenty two clinics and four trades");
+});
+
+// ---- nothing that goes wrong with one page may stop the server ----
+
+test("the process guard logs a fixed line and keeps the server up; a burst of uncaught exceptions stops it cleanly to be started again", () => {
+  const handlers = {};
+  const lines = [];
+  const exits = [];
+  let now = 0;
+  installProcessGuard({ on: (event, listener) => { handlers[event] = listener; } }, { log: (line) => lines.push(line), exit: (code) => exits.push(code), now: () => now });
+  handlers.uncaughtException(Object.assign(new Error("SECRET words from a web page"), { code: "Z_BUF_ERROR" }));
+  handlers.unhandledRejection(new TypeError("SECRET rejection text"));
+  handlers.unhandledRejection("a string, not an error");
+  assert.deepEqual(lines, ["uncaught exception, kept from stopping the server: Error Z_BUF_ERROR", "unhandled rejection, kept from stopping the server: TypeError", "unhandled rejection, kept from stopping the server: Error"]);
+  assert.deepEqual(exits, [], "one bad page does not stop the server");
+  assert.ok(!lines.join("\n").includes("SECRET"));
+  // four more within the minute: something is badly wrong, so it stops and the host starts it again clean
+  for (let i = 0; i < 3; i += 1) { now += 1000; handlers.uncaughtException(new Error("x")); }
+  assert.deepEqual(exits, []);
+  now += 1000;
+  handlers.uncaughtException(new Error("x"));
+  assert.deepEqual([exits, lines.at(-1)], [[1], "5 uncaught exceptions within 60 seconds: stopping, to be started again clean"]);
+  // spread over time they never add up
+  const calm = [];
+  const h2 = {};
+  let t2 = 0;
+  installProcessGuard({ on: (event, listener) => { h2[event] = listener; } }, { log: () => {}, exit: (code) => calm.push(code), now: () => t2 });
+  for (let i = 0; i < 20; i += 1) { t2 += 61_000; h2.uncaughtException(new Error("x")); }
+  assert.deepEqual(calm, []);
+});
+
+// ---- the real replies of the first live day (business names and numbers removed). None is a complaint. ----
+
+const REAL_REPLIES = {
+  form: "Thank you for your email. Please find attached the Request for Conveyancing Quotation Form. If this could be completed and returned, a quote can then be raised for you.",
+  closure: "Thank you for your query. Please contact the office on 0121 496 0000 to speak to someone.\n\nPlease note our offices will be closed from 24 December until 4 January. Emails will not be monitored during this period.",
+  callOnly: "Our quotes are property specific and bespoke. You will need to call our offices to obtain a quote.\n\nNO EXCEPTIONS WILL BE MADE to completion dates agreed after exchange.\n\n(Please note that ALL calls to our offices may be monitored or recorded)\n\nThe information in this email is confidential and may be legally privileged. It is intended solely for the addressee. If you have received it in error please notify the sender and do not contact any third party about it.",
+  promo: "Following a review of our records, we noticed that you previously discussed dental implant treatment with your dentist. We wanted to let you know that throughout December we are offering £200 off implant consultations at the practice.",
+};
+
+test("the first live day's real replies: none is a complaint, none stops sending, and a reply that will not answer by email is scored low and quoted on the card", async () => {
+  for (const [name, text] of Object.entries(REAL_REPLIES)) {
+    const own = ownWords(text);
+    assert.deepEqual([readsAsComplaint(own), asksNotToBeContacted(own)], [false, false], name);
+  }
+  assert.equal(ownWords(REAL_REPLIES.callOnly), "Our quotes are property specific and bespoke. You will need to call our offices to obtain a quote.\n\nNO EXCEPTIONS WILL BE MADE to completion dates agreed after exchange.\n\n(Please note that ALL calls to our offices may be monitored or recorded)", "the confidentiality footer is taken off");
+  // sending the person to the telephone is recognised, and is not a next step
+  assert.deepEqual([saysToCall(REAL_REPLIES.form), saysToCall(REAL_REPLIES.closure), saysToCall(REAL_REPLIES.callOnly), saysToCall(REAL_REPLIES.promo)], [false, true, true, false]);
+  assert.deepEqual([sentenceToCall(ownWords(REAL_REPLIES.closure)), sentenceToCall(ownWords(REAL_REPLIES.callOnly))], ["Please contact the office on 0121 496 0000 to speak to someone.", "You will need to call our offices to obtain a quote."]);
+  assert.deepEqual(["Please contact the office on 0121 496 0000 to speak to someone.", "You will need to call our offices to obtain a quote.", "Call us and we can see you on Thursday at 10am.", "Please call and we will ring you back.", "You can book online here."].map(saysOnlyToCall), [true, true, false, false, false]);
+
+  // through the whole reader. The reply reader is made to get two things wrong on purpose: it calls every one a
+  // complaint (quoting a sentence that is really there), and it calls "call us" a next step.
+  const first = (text) => ownWords(text).split(/(?<=[.!?])\s+/)[0];
+  const t = await house({ rung: 3, hooks: { reply: async (request) => {
+    const [name, text] = Object.entries(REAL_REPLIES).find(([, body]) => request.user.includes(first(body)));
+    const call = sentenceToCall(ownWords(text));
+    return {
+      from_a_person: true, asks_not_to_be_contacted: true, answered_the_question: { value: false, quote: null },
+      offered_a_next_step: name === "form" ? { value: true, quote: "If this could be completed and returned, a quote can then be raised for you." } : call ? { value: true, quote: call } : { value: false, quote: null },
+      complains_about_being_contacted: { value: true, quote: first(text) },
+    };
+  } } });
+  const { x, mailbox } = t;
+  const made = {};
+  for (const key of ["alpha", "beta", "gamma", "delta"]) made[key] = await clinic(t, key);
+  await run(x);
+  assert.equal(mailbox.sent.length, 4);
+  const pairs = { alpha: "form", beta: "closure", gamma: "callOnly", delta: "promo" };
+  for (const [key, name] of Object.entries(pairs)) mailbox.deliver({ from: made[key].email, receivedAt: new Date(x.w.clock.now().getTime() + 40 * MINUTE), inReplyTo: mailbox.to(made[key].email).messageId, text: REAL_REPLIES[name] });
+  x.w.clock.advance(HOUR);
+  assert.deepEqual(await x.runtime.collectReplies(), { enquiriesChecked: 4, person: 4, automatic: 0, optedOut: 0, bounced: 0, complaints: 0 }, "four replies from people; nobody opted out and nobody complained, whatever the reader said");
+  assert.ok(!(await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId })).some((e) => (e.reasonCode ?? "").startsWith("enquiry_breaker")), "sending is not stopped");
+  assert.deepEqual(await rows(h, "select 1 from suppressions where tenant_id = $1", [x.w.tenantId]), []);
+  const stored = async (key) => (await prospectOf(made[key].id)).test_result.replies[0];
+  assert.deepEqual([(await stored("alpha")).next_step, (await stored("alpha")).told_to_call ?? null], [{ value: true, quote: "If this could be completed and returned, a quote can then be raised for you." }, null], "a form to fill in and return is a next step");
+  assert.deepEqual([(await stored("beta")).next_step, (await stored("beta")).told_to_call], [{ value: false, quote: null }, "Please contact the office on 0121 496 0000 to speak to someone."], "\"contact the office\" is not");
+  assert.deepEqual([(await stored("gamma")).next_step, (await stored("gamma")).told_to_call], [{ value: false, quote: null }, "You will need to call our offices to obtain a quote."]);
+  assert.deepEqual([(await stored("delta")).answered, (await stored("delta")).next_step, (await stored("delta")).told_to_call ?? null], [{ value: false, quote: null }, { value: false, quote: null }, null], "the mail-merge answered nothing that was asked");
+
+  // scored a day later: each replied within the hour, so speed is 42; what they said decides the rest
+  x.w.clock.advance(24 * HOUR);
+  await run(x);
+  const out = await lastOutput(x);
+  const parts = async (key) => (await prospectOf(made[key].id)).capture_breakdown.parts.slice(0, 2).map((p) => p.points);
+  assert.deepEqual([await parts("alpha"), await parts("beta"), await parts("gamma"), await parts("delta")], [[42, 8], [42, 0], [42, 0], [42, 0]], "a person replied each time; a reply that will not answer by email gets nothing for what it said");
+  assert.deepEqual([Number((await prospectOf(made.gamma.id)).capture_score), (await prospectOf(made.gamma.id)).stage], [50, "shortlisted"], "42 for speed and 8 for routes, of 100: at the threshold, so still a prospect");
+  // the card quotes it, in their own words, without the footer
+  for (const part of [
+    '- A person replied 2026-11-16 10:40 UTC: "Our quotes are property specific and bespoke. You will need to call our offices to obtain a quote. NO EXCEPTIONS WILL BE MADE to completion dates agreed after exchange.',
+    '- **They did not answer the question by email and sent the enquirer to the telephone:** "You will need to call our offices to obtain a quote."',
+    '- **They did not answer the question by email and sent the enquirer to the telephone:** "Please contact the office on 0121 496 0000 to speak to someone."',
+    "- reply quality: 0 of 20. Did not answer the question asked; offered no next step.",
+  ]) assert.ok(out.body.includes(part), `the card is missing "${part}"\n${out.body}`);
+  assert.ok(!out.body.includes("legally privileged"), "the firm's footer is not quoted");
+  // and the drafting model is told, so the first message can say so
+  assert.ok(t.requests.filter((r) => r.stage === "draft").some((r) => r.user.includes('The reply did not answer by email and told the enquirer to telephone. In its words: "You will need to call our offices to obtain a quote."')));
 });

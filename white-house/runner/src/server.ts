@@ -81,6 +81,10 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.listSent(b as string, query.get("since"));
         return r.status === 200 ? send(res, 200, { enquiries: r.enquiries }) : fail(r);
       }
+      case "GET rooms/:id/replies": {
+        const r = await rt.listReplies(b as string, query.get("since"));
+        return r.status === 200 ? send(res, 200, { replies: r.replies }) : fail(r);
+      }
       case "GET rooms/:id/approvals": {
         const r = await rt.listApprovals(b as string);
         return r.status === 200 ? send(res, 200, { approvals: r.approvals }) : fail(r);

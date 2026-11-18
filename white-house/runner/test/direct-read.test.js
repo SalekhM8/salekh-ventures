@@ -26,6 +26,7 @@ before(async () => {
     const route = routes[req.url.split("?")[0]];
     if (!route) { res.writeHead(404, { "content-type": "text/plain" }); res.end("not found"); return; }
     if (route.hang) return; // never answers
+    if (route.handle) return route.handle(req, res);
     res.writeHead(route.status ?? 200, { "content-type": route.type ?? "text/html; charset=utf-8", ...(route.headers ?? {}) });
     res.end(route.body ?? "");
   });
@@ -195,6 +196,51 @@ test("robots.txt: our own group if there is one, otherwise the one for everybody
   await paced.read(`${base}/`);
   await paced.read(`${base}/`);
   assert.ok(waits.length === 1 && waits[0] > 1500 && waits[0] <= 2000, JSON.stringify(waits));
+});
+
+test("a body that is broken, cut short or never ends is an ordinary failure to read that page: nothing is left to bring the server down", async () => {
+  const zlib = await import("node:zlib");
+  const page = Buffer.from(`<html><body><h1>Fixture clinic</h1><p>${"Fixture words about treatments. ".repeat(400)}</p></body></html>`);
+  const uncaught = [];
+  const onUncaught = (err) => uncaught.push(err);
+  process.on("uncaughtException", onUncaught);
+  process.on("unhandledRejection", onUncaught);
+  const cut = (encoding, bytes, type = "text/html") => ({ handle: (req, res) => { res.writeHead(200, { "content-type": type, "content-encoding": encoding }); res.end(bytes.subarray(0, Math.floor(bytes.length / 2))); } });
+  routes = {
+    // what took the server down: a gzip body that stops half way
+    "/gzip-cut": cut("gzip", zlib.gzipSync(page)),
+    "/brotli-cut": cut("br", zlib.brotliCompressSync(page)),
+    "/deflate-cut": cut("deflate", zlib.deflateSync(page)),
+    "/gzip-nonsense": { handle: (req, res) => { res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" }); res.end("this is not gzip at all"); } },
+    // a file of the wrong kind whose compressed body is also cut: refused for its kind, and the broken stream behind it harms nothing
+    "/pdf-gzip-cut": cut("gzip", zlib.gzipSync(page), "application/pdf"),
+    // the connection is reset part way through a body that promised more
+    "/reset": { handle: (req, res) => { res.writeHead(200, { "content-type": "text/html", "content-length": String(page.length) }); res.write(page.subarray(0, 500)); setTimeout(() => req.socket.destroy(), 20); } },
+    "/reset-gzip": { handle: (req, res) => { const z = zlib.gzipSync(page); res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip", "content-length": String(z.length) }); res.write(z.subarray(0, 60)); setTimeout(() => req.socket.destroy(), 20); } },
+    // the body starts and never ends
+    "/never-ends": { handle: (req, res) => { res.writeHead(200, { "content-type": "text/html" }); res.write("<html><body><p>Fixture start"); } },
+    "/never-ends-gzip": { handle: (req, res) => { res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" }); res.write(zlib.gzipSync(page).subarray(0, 40)); } },
+    // and a whole one, compressed each way, is read
+    "/gzip-ok": { handle: (req, res) => { res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" }); res.end(zlib.gzipSync(page)); } },
+    "/brotli-ok": { handle: (req, res) => { res.writeHead(200, { "content-type": "text/html", "content-encoding": "br" }); res.end(zlib.brotliCompressSync(page)); } },
+  };
+  try {
+    const reader = localReader({ timeoutMs: 400 });
+    for (const path of ["/gzip-cut", "/brotli-cut", "/deflate-cut", "/gzip-nonsense", "/reset", "/reset-gzip"]) await assert.rejects(reader.read(`${base}${path}`), is("direct_failed"), path);
+    await assert.rejects(reader.read(`${base}/pdf-gzip-cut`), is("direct_not_text"));
+    for (const path of ["/never-ends", "/never-ends-gzip"]) {
+      const started = Date.now();
+      await assert.rejects(reader.read(`${base}${path}`), is("direct_timeout"), path);
+      assert.ok(Date.now() - started < 3000, path);
+    }
+    for (const path of ["/gzip-ok", "/brotli-ok"]) assert.match((await reader.read(`${base}${path}`)).text, /# Fixture clinic/);
+    // late errors from streams already torn down have somewhere to go
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(uncaught.map((e) => e?.code ?? e?.message), [], "not one error went uncaught");
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    process.off("unhandledRejection", onUncaught);
+  }
 });
 
 // ---- in front of the outside reader ----
