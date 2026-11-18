@@ -306,7 +306,7 @@ export function factsFor(
     `Staff: ${said(a?.staff_count)}. Locations: ${said(a?.locations)}`,
     ...p.signals.filter((s) => s.unconfirmed !== true).map((s) => `Signal seen: ${s.signal} (${SIGNAL_MEANING[s.signal as (typeof SIGNALS)[number]] ?? s.signal}). What was seen: ${s.evidence || "not recorded"}`),
     differences.length
-      ? `Checked differences from nearby businesses of the same kind (you may use one, as a plain fact, and make no other comparison):\n${differences.map((d) => `  - ${d}`).join("\n")}`
+      ? `Checked differences from nearby businesses of the same kind (when one gives a nearby business's reply time to the same kind of enquiry, lead with that one; otherwise you may use one, as a plain fact; make no other comparison):\n${differences.map((d) => `  - ${d}`).join("\n")}`
       : "Comparison with nearby businesses: nothing checked that differs. Make no comparison.",
     ...(result ?? ["Enquiry test: NOT DONE. No enquiry has been sent to this business or to any other. Do not say or imply one was."]),
   ];

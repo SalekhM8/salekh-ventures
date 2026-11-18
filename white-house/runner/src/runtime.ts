@@ -134,6 +134,8 @@ export interface Runtime {
   closeInterrupted(): Promise<{ closed: number; restart: string[] }>;
   /** The owner's switch: lift a stop on sending for one day (YYYY-MM-DD). true when it lifted one. */
   clearStop(day: string): Promise<boolean>;
+  /** Owner's switch: profiles written since this day are written again on the next run, by today's rules. Once per day given. */
+  redraftCards(since: string): Promise<number>;
   /** Score whatever is due and bring each room's "Results so far today" up to date. Returns how many were scored. */
   scoreDue(): Promise<number>;
   /** Replies received in one room since a moment (default: the last seven days). Personal data, on purpose. */
@@ -706,6 +708,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
   };
 
+  async function redraftCards(since: string): Promise<number> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) return 0;
+    return gatewayDb.tx(tenantId, async (tx) => {
+      const code = `cards_redrafted_${since.replace(/-/g, "_")}`;
+      if ((await tx.query("select 1 from events where type = 'stage' and reason_code = $1 limit 1", [code])).rows.length > 0) return 0;
+      // Back to 'tested' with no card: the next run writes the card again, scoring and rivals by today's rules.
+      const r = await tx.query(
+        "update prospects set stage = 'tested', card = null where stage = 'shortlisted' and capture_score is not null and shortlisted_at >= $1::date and purged_at is null returning business_id",
+        [since]);
+      const businessId = (r.rows[0]?.business_id as string | undefined) ?? null;
+      await emitEvent(tx, { tenantId, businessId, department: "outreach", type: "stage", reasonCode: code, summary: `Profiles written today and since will be written again by today's rules: ${r.rowCount ?? 0}`, payload: { since }, now: clock() });
+      return r.rowCount ?? 0;
+    });
+  }
+
   async function scoreDueNow(): Promise<number> {
     if (standby) return 0;
     // Every floor with enquiries out and not yet scored.
@@ -1043,5 +1060,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

@@ -147,6 +147,10 @@ server.listen(port, host, () => {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(env.WH_CLEAR_STOP)) console.error("WH_CLEAR_STOP must be a date written YYYY-MM-DD. Nothing was lifted.");
         else console.log(`stop on sending for ${env.WH_CLEAR_STOP}: ${(await runtime.clearStop(env.WH_CLEAR_STOP).catch(() => false)) ? "lifted by the owner's switch" : "nothing to lift (not today, not stopped, or already lifted once)"}`);
       }
+      if (env.WH_REDRAFT_CARDS_SINCE) {
+        const n = await runtime.redraftCards(env.WH_REDRAFT_CARDS_SINCE).catch((err) => { console.error(`profiles to write again: ${(err as { code?: string })?.code ?? ""} ${String((err as Error)?.message ?? err).slice(0, 200)}`); return -1; });
+        console.log(n < 0 ? "profiles to write again: failed" : `profiles written since ${env.WH_REDRAFT_CARDS_SINCE} to be written again on the next run: ${n}`);
+      }
       const mail = await runtime.checkMail().catch(() => null);
       if (mail) {
         console.log(`mail out: ${mail.out.reachable ? "reachable" : `unreachable (${mail.out.code ?? "unknown"})`}`);

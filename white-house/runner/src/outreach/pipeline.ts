@@ -1214,7 +1214,10 @@ export function renderShortlist(
     const limited =
       p.isLimitedCompany === "yes" && p.companiesHouse
         ? `yes, ${p.companiesHouse.name} (${p.companiesHouse.number}), matched by ${p.companiesHouse.matched_by} (source: ${p.companiesHouse.source_url})`
-        : p.isLimitedCompany === "not_checked" ? "not checked" : p.isLimitedCompany;
+        : p.isLimitedCompany === "not_checked" ? "not checked"
+        : p.isLimitedCompany === "not_found" ? "not found on Companies House under this name (may trade under another name, or be a sole trader or partnership)"
+        : p.isLimitedCompany === "no" ? "no: not a limited company"
+        : String(p.isLimitedCompany).replace(/_/g, " ");
     const route = bestRoute(p.routes);
     const price = typeof a?.highest_value_price === "object" && a.highest_value_price !== null ? (a.highest_value_price as { amount: number; source_url: string }) : null;
     const afford = [
@@ -1271,7 +1274,7 @@ export function renderShortlist(
     }
     if (kind.card_note) lines.push(`**Read this result with care.** ${kind.card_note}`, "");
     lines.push(
-      `**Against local competitors${t && p.card?.rivals_pending ? " (rivals not tested yet)" : ""}**`, "",
+      `**Against local competitors${t && p.card?.rivals_pending ? " (some rivals not tested yet)" : ""}**`, "",
       ...(p.comparison
         ? [p.comparison.table, "", ...(p.comparison.unfavourable.length ? p.comparison.unfavourable : ["Nothing checked here goes against this business."])]
         : ["No other business of this kind in this place is on the list yet, so there is nothing to compare with. Not found."]),

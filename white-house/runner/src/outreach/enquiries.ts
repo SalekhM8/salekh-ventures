@@ -496,9 +496,13 @@ export async function scoreTested(
           [p.prospectId, capture.score, JSON.stringify(capture), fit.score, JSON.stringify(fit.breakdown)],
         );
         await event("tested", "scored");
-      } else if (raw.stage === "filtered_out") {
-        await tx.query("update prospects set stage = 'tested', filter_reason = null, filtered_out_at = null where prospect_id = $1", [p.prospectId]);
-        await event("tested", "restored_owner_shows_everyone");
+      } else {
+        // Scored before: the score is worked out again by today's rules, so a fix to the scoring reaches it.
+        await tx.query("update prospects set capture_score = $2, capture_breakdown = $3::jsonb where prospect_id = $1", [p.prospectId, capture.score, JSON.stringify(capture)]);
+        if (raw.stage === "filtered_out") {
+          await tx.query("update prospects set stage = 'tested', filter_reason = null, filtered_out_at = null where prospect_id = $1", [p.prospectId]);
+          await event("tested", "restored_owner_shows_everyone");
+        }
       }
       const people = test.replies.filter((r) => r.kind === "person").sort((a, b) => a.received_at.localeCompare(b.received_at));
       const minutesToReply = people[0] ? (new Date(people[0].received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null;

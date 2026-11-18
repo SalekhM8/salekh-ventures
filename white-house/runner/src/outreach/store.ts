@@ -747,6 +747,17 @@ export async function linkCompetitors(db: Db, scope: ProspectScope, prospectId: 
     const timezone = (await tx.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0].timezone as string;
     const facts = (r: any) => publicFacts(r, settings, timezone, now);
     const district = typeof self.postcode_key === "string" ? (self.postcode_key as string).slice(0, -3) : null;
+    // First choice (owner, 18 Nov 2026): rivals of the same kind in the same place that have ALREADY been tested, best
+    // first. "All Saints answered the same question in four minutes" is the line that matters, so those come before
+    // anything untested. Untested neighbours only fill the space left.
+    const testedRivals = self.search_area === null ? [] : (await tx.query(
+      `select ${COLS} from prospects
+        where business_id = $1 and prospect_id <> $2 and search_area = $3 and business_type = $4
+          and capture_score is not null and test_result is not null and purged_at is null
+          and coalesce(filter_reason, '') not in ('not_a_match', 'duplicate', 'suppressed', 'part_of_group', 'opted_out', 'enquiry_bounced')
+        order by capture_score desc, name limit 3`,
+      [scope.businessId, prospectId, self.search_area, self.business_type],
+    )).rows;
     // Rivals already linked to this prospect stay its rivals, so a card reissued later compares the same businesses.
     const linked = await tx.query(
       `select ${COLS.split(", ").map((c) => `p.${c}`).join(", ")} from prospect_competitors c join prospects p on p.prospect_id = c.competitor_id
@@ -763,8 +774,11 @@ export async function linkCompetitors(db: Db, scope: ProspectScope, prospectId: 
         limit 3`,
       [scope.businessId, prospectId, self.search_area, district, self.business_type],
     );
-    // Shown in the same order every time a card is issued.
-    const competitors = others.rows.map(facts).sort((a, b) => a.name.localeCompare(b.name));
+    const chosen = [...testedRivals];
+    for (const r of others.rows) if (chosen.length < 3 && !chosen.some((c) => c.prospect_id === r.prospect_id)) chosen.push(r);
+    // Tested rivals first, best first; then the untested, by name. The same order every time a card is issued.
+    const testedIds = new Set(testedRivals.map((r) => r.prospect_id));
+    const competitors = [...chosen.filter((r) => testedIds.has(r.prospect_id)).map(facts), ...chosen.filter((r) => !testedIds.has(r.prospect_id)).map(facts).sort((a, b) => a.name.localeCompare(b.name))];
     for (const c of competitors) {
       await tx.query(
         `insert into prospect_competitors (tenant_id, business_id, prospect_id, competitor_id, comparison, created_at)

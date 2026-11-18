@@ -471,7 +471,7 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
     "- reply quality: 0 of 20.", "- follow up: 0 of 10.", "- routes: 8 of 20.", "- reviews answered: not measured: there is no reliable source yet.", "- social activity: not measured: there is no reliable source yet.",
     "- Test enquiry sent 2026-11-16 10:00 UTC, signed \"Salekh\"", "- No reply from a person within 24 hours.",
     "**Estimated leak: £600 to £13,500 a month.** This is an estimate, not a measurement. Workings: £3,000 (their published price, source: https://fixture-alpha.example.test/prices) × 20 to 60 enquiries a month (ASSUMPTION)",
-    "**Against local competitors (rivals not tested yet)**",
+    "**Against local competitors (some rivals not tested yet)**",
     "| | Fixture Alpha Dental | Fixture Beta Dental | Fixture Gamma Dental | Fixture Zeta Dental |",
     "| Reply to the test enquiry | no reply from a person | a person replied in 10 minutes | Not tested yet | Not tested yet |",
     "| Capture score | 8 out of 100 | 88 out of 100 | Not tested yet | Not tested yet |",
@@ -511,9 +511,10 @@ test("the daily flow: propose, approve, send, read replies, wait 24 hours, score
   assert.ok(out.data.tally.reissued >= 1 && out.data.cards.filter((c) => !c.reissue).every((c) => c.prospect_id !== alpha.id), "the rival, tested now, gets its own card too (owner, 18 Nov 2026: everyone tested is shown)");
   for (const part of [
     "Fixture Alpha Dental (issued again: rivals' results are in)", "**Against local competitors**",
-    "| Reply to the test enquiry | no reply from a person | a person replied in 10 minutes | Not tested yet | a person replied in 20 minutes |",
+    // tested rivals come first, best first (owner, 18 Nov 2026), then the untested
+    "| Reply to the test enquiry | no reply from a person | a person replied in 10 minutes | a person replied in 20 minutes | Not tested yet |",
     // a "yes" whose sentence is not in the reply is not a yes: that part is left out, 42 + 0 + 8 of 80
-    `| Capture score | 8 out of 100 | 88 out of 100 | Not tested yet | ${Math.round((50 / 80) * 100)} out of 100 |`,
+    `| Capture score | 8 out of 100 | 88 out of 100 | ${Math.round((50 / 80) * 100)} out of 100 | Not tested yet |`,
     "Shortlisted: 1, and 2 issued again with rivals' results",
   ]) assert.ok(out.body.includes(part), `the reissued card is missing "${part}"\n${out.body}`);
   const z = await prospectOf(zeta.id);
@@ -953,7 +954,7 @@ test("with Places: it finds the businesses, gives the reviews and hours with the
   const links = await rows(h, "select p.name from prospect_competitors c join prospects p on p.prospect_id = c.competitor_id where c.prospect_id = $1 order by c.created_at", [kappa.prospect_id]);
   assert.deepEqual(links.map((l) => l.name), ["Fixture Mu Dental", "Fixture Xi Dental"], "nearest first; not itself, not one that is closed, not one with no website");
   for (const part of [
-    "**Against local competitors (rivals not tested yet)**", "| | Fixture Kappa Dental | Fixture Mu Dental | Fixture Xi Dental |",
+    "**Against local competitors (some rivals not tested yet)**", "| | Fixture Kappa Dental | Fixture Mu Dental | Fixture Xi Dental |",
     `- By the opening hours Google shows for them, the enquiry was sent while they were open (source: ${source}).`,
     "- reviews answered: not measured: there is no reliable source yet.",
   ]) assert.ok(out.body.includes(part), `the card is missing "${part}"\n${out.body}`);
