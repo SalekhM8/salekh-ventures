@@ -31,6 +31,19 @@ const TO = { name: "Jo Fixture", email: "jo@fixture-recipient.example.test" };
 
 // ---- the code checks ----
 
+test("the findings list: written by code from the stored results, the business first then same-kind rivals fastest first, no money, and placed before the closing question", async () => {
+  const { findingsBlock, withFindings } = await import("../dist/outreach/followups.js");
+  const test = { enquiry_id: "e", sent_at: "2026-11-17T10:57:00Z", replies: [], slot: "in_hours" };
+  const rival = (name, mins) => ({ name, tested: "scored", reply_minutes: mins, slot: "in_hours" });
+  const block = findingsBlock({ name: "Fixture Dental", area: "Fixtureton", test }, [rival("Slow Dental", 300), rival("Quick Dental - Cosmetic", 4), { name: "Untested", tested: "not_tested", reply_minutes: null, slot: "in_hours" }]);
+  assert.equal(block, "What I found in Fixtureton, same question sent on Tuesday at 10:57:\n- Fixture Dental (you): no reply within 24 hours\n- Quick Dental: replied in 4 minutes\n- Slow Dental: replied in 5 hours", "a rival not yet tested is left out");
+  assert.ok(!/£|%/.test(block));
+  assert.equal(findingsBlock({ name: "Fixture Dental", area: null, test }, []), null, "nobody to compare with: no list");
+  const body = "Hi Jo,\n\nThanks for picking up today.\n\nWould you have 20 minutes this week?\n\nThanks,\nSalekh Mahmood, Salekh Ventures";
+  assert.equal(withFindings(body, "LIST"), "Hi Jo,\n\nThanks for picking up today.\n\nLIST\n\nWould you have 20 minutes this week?\n\nThanks,\nSalekh Mahmood, Salekh Ventures");
+  assert.equal(withFindings(body, null), body);
+});
+
 test("the code checks: length, signed, no £ or %, no links, a valid address; the model's draft is held to more", () => {
   assert.deepEqual(lintFollowup(GOOD, TO.email), []);
   const body = (text) => ({ ...GOOD, body: text });
@@ -39,7 +52,7 @@ test("the code checks: length, signed, no £ or %, no links, a valid address; th
   refuses(body(GOOD.body.replace("today.", "today. You lose 30% of enquiries.")), /money figure or a percentage/);
   refuses(body(GOOD.body.replace("today.", "today. You lose thirty per cent.")), /money figure or a percentage/);
   refuses(body(GOOD.body.replace(SIGN, "Salekh")), /not signed/);
-  refuses(body(GOOD.body.replace("today.", `today. ${"word ".repeat(170)}`)), /under 180/);
+  refuses(body(GOOD.body.replace("today.", `today. ${"word ".repeat(270)}`)), /under 280/);
   refuses(body(GOOD.body.replace("today.", "today. See https://fixture.example.test")), /link/);
   refuses(body(GOOD.body.replace("today.", "today. See www.fixture")), /link/);
   refuses(body(GOOD.body.replace("today.", "today. See salekhventures.com")), /link/);

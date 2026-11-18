@@ -51,6 +51,8 @@ export const DRAFT_OUTCOMES = ["interested", "call_back", "meeting_booked"] as c
 export type DraftOutcome = (typeof DRAFT_OUTCOMES)[number];
 export const SIGNATURE = "Salekh Mahmood, Salekh Ventures";
 export const MAX_WORDS = 180;
+/** The whole email, once the findings list written by code is in it. */
+export const MAX_WORDS_WITH_FINDINGS = 280;
 export const MAX_SUBJECT = 120;
 const MAX_BODY_CHARS = 4000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -102,7 +104,7 @@ export function lintFollowup(draft: { subject: string; body: string }, to: strin
   if (/[\r\n]/.test(subject)) problems.push("the subject has a line break in it");
   if (!body) problems.push("the message is empty");
   if (body.length > MAX_BODY_CHARS) problems.push(`the message is longer than ${MAX_BODY_CHARS} characters`);
-  if (wordCount(body) >= MAX_WORDS) problems.push(`the message is ${wordCount(body)} words: it must be under ${MAX_WORDS}`);
+  if (wordCount(body) >= MAX_WORDS_WITH_FINDINGS) problems.push(`the message is ${wordCount(body)} words: it must be under ${MAX_WORDS_WITH_FINDINGS}`);
   if (body && !isSigned(body)) problems.push(`it is not signed "${SIGNATURE}" on its last line`);
   if (MONEY_OR_SHARE.test(`${subject}\n${body}`)) problems.push("it has a money figure or a percentage in it (£, $, €, % or per cent)");
   if (LINK.test(`${subject}\n${body}`)) problems.push("it has a link, a web address or an email address in it");
@@ -176,6 +178,41 @@ export function rivalLine(self: { test: TestResult | null }, rivals: PublicFacts
   if (!best) return null;
   const line = `${best.name} replied to the same kind of enquiry in ${sayMinutes(best.reply_minutes as number)}.`;
   return { line, numbers: numbersIn(line) };
+}
+
+/**
+ * "What I found": a short list written by code from the stored test results, never by the model, so every line is a
+ * fact. The business itself first, then the same-kind businesses nearby that were tested in the same way, fastest
+ * first. No money figures (the rules for this email forbid them). Owner, 18 Nov 2026: show the gap, don't describe it.
+ */
+export function findingsBlock(self: { name: string; area: string | null; test: TestResult | null }, rivals: PublicFacts[], timezone = "Europe/London"): string | null {
+  const test = self.test;
+  if (!test?.sent_at) return null;
+  const first = test.replies.filter((r) => r.kind === "person").sort((a, b) => a.received_at.localeCompare(b.received_at))[0];
+  const mins = first ? (new Date(first.received_at).getTime() - new Date(test.sent_at).getTime()) / 60000 : null;
+  const when = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, weekday: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(test.sent_at)).replace(",", "").replace(/^(\S+) /, "$1 at ");
+  const slot = test.slot ?? null;
+  const others = rivals
+    .filter((r) => r.tested === "scored" && (!slot || !r.slot || r.slot === slot))
+    .sort((a, b) => (a.reply_minutes ?? Infinity) - (b.reply_minutes ?? Infinity))
+    .slice(0, 3);
+  if (others.length === 0) return null;
+  const line = (name: string, m: number | null) => `- ${name}: ${m === null ? "no reply within 24 hours" : `replied in ${sayMinutes(m)}`}`;
+  return [
+    `What I found${self.area ? ` in ${self.area}` : ""}, same question sent on ${when}:`,
+    line(`${self.name} (you)`, mins),
+    ...others.map((r) => line(r.name.split(" - ")[0] as string, r.reply_minutes)),
+  ].join("\n");
+}
+
+/** Put the findings list into a drafted email: before the closing question when there is one, else before the sign-off. */
+export function withFindings(body: string, block: string | null): string {
+  if (!block) return body;
+  const parts = body.trim().split(/\n\s*\n/);
+  const signAt = parts.findIndex((p) => isSigned(p) || p.includes(SIGNATURE.split(",")[0] as string));
+  const at = signAt > 0 && /\?\s*$/.test(parts[signAt - 1] as string) ? signAt - 1 : signAt >= 0 ? signAt : parts.length;
+  parts.splice(at, 0, block);
+  return parts.join("\n\n");
 }
 
 export interface FollowupFactsInput {
@@ -548,7 +585,9 @@ export function createFollowups(deps: FollowupDeps) {
           await voidApproval(t, tenantId, o.approval_id, "replaced", deps.clock());
           await t.query("update followups set status = 'not_sent', not_sent_reason = 'replaced_by_a_newer_draft', updated_at = $2 where followup_id = $1", [o.followup_id, deps.clock()]);
         }
-        const draftRow = made.draft as { subject: string; body: string };
+        const drafted = made.draft as { subject: string; body: string };
+        const timezone = (await t.query("select timezone from tenants where tenant_id = wh_tenant()")).rows[0]?.timezone ?? "Europe/London";
+        const draftRow = { subject: drafted.subject, body: withFindings(drafted.body, findingsBlock({ name: p.name, area: p.search_area ?? p.area ?? null, test }, found.rivals, timezone)) };
         await t.query(
           `insert into followups (followup_id, tenant_id, business_id, prospect_id, call_outcome_id, outcome, to_name, to_address, subject, body, problems, status, created_at, updated_at)
            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'draft', $12, $12)`,
