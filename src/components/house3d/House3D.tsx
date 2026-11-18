@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Sky } from "@react-three/drei";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -10,6 +10,7 @@ import { Interior } from "./Interior";
 import { FloorScene, ROOM_W, floorCamera, floorPan } from "./FloorScene";
 import { RUN_REFUSED, useLiveHouse } from "./live";
 import { Approvals } from "./Approvals";
+import { CallList, parseShortlist } from "./CallList";
 import { Markdown } from "./Markdown";
 import { CATALOGUE } from "@/lib/agents";
 
@@ -229,6 +230,18 @@ type Msg = { id: number; from: "you" | "chief"; text: string; rooms: string[]; t
 
 /* ------------------------------ the page --------------------------- */
 
+/** The agents actually built and running in a room, by catalogue name. Everything else in the catalogue is offered, not built. */
+const BUILT: Record<string, string[]> = {
+  outreach: ["Lead Finder", "Lead Researcher", "Call Prep"],
+  data: ["Daily Read"],
+  research: ["Market Report"],
+};
+function isBuilt(roomId: string, agent: string) {
+  // Only the Salekh Ventures floor has running agents so far.
+  const [floor, dept] = roomId.split(":");
+  return floor === "salekh-ventures" && (BUILT[dept ?? ""] ?? []).includes(agent);
+}
+
 export default function House3D({
   demo = false,
   embedded = false,
@@ -259,6 +272,30 @@ export default function House3D({
   const [draft, setDraft] = useState("");
   const [talking, setTalking] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>({});
+  // Which finished pieces of work Salekh has opened, kept on this device. Unopened work is "new for you".
+  const [seen, setSeen] = useState<Set<string>>(() => {
+    try {
+      return new Set<string>(JSON.parse(localStorage.getItem("wh-seen") ?? "[]") as string[]);
+    } catch {
+      return new Set<string>();
+    }
+  });
+  const markSeen = (id: string) =>
+    setSeen((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev).add(id);
+      try {
+        localStorage.setItem("wh-seen", JSON.stringify([...next].slice(-300)));
+      } catch {}
+      return next;
+    });
+  const [showOlder, setShowOlder] = useState(false);
+  /** The newest unopened piece of work in a room, when there is one (live only). */
+  const unread = (roomId: string) => {
+    if (!isLive) return null;
+    const o = sim[roomId]?.outputs[0];
+    return o && !seen.has(String(o.id)) && !String(o.title).startsWith("Results so far") ? o : null;
+  };
   const [scoring, setScoring] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [scoreMsg, setScoreMsg] = useState("");
@@ -300,6 +337,7 @@ export default function House3D({
     setRunMsg(reason ? (RUN_REFUSED[reason] ?? `Refused: ${reason}`) : "Started.");
   };
   const openOutput = async (id: string, title: string, time: string) => {
+    markSeen(id);
     const o = await live.output(id);
     setViewing({ id, title, time, body: o?.body ?? "Could not load this piece of work." });
   };
@@ -316,14 +354,12 @@ export default function House3D({
   };
 
   const stateOf = (id: string): RoomState => (stopped ? "idle" : (sim[id]?.state ?? "idle"));
-  const counts = useMemo(() => {
-    const all = Object.values(sim);
-    return {
-      working: all.filter((r) => r.state === "working" || r.state === "handoff").length,
-      waiting: all.filter((r) => r.state === "waiting").length,
-      failed: all.filter((r) => r.state === "failed").length,
-    };
-  }, [sim]);
+  const allRooms = Object.values(sim);
+  const counts = {
+    working: allRooms.filter((r) => r.state === "working" || r.state === "handoff").length,
+    waiting: allRooms.filter((r) => r.state === "waiting").length,
+    failed: allRooms.filter((r) => r.state === "failed").length,
+  };
 
   const say = (from: Msg["from"], text: string, rooms: string[] = []) => {
     msgId.current += 1;
@@ -344,7 +380,11 @@ export default function House3D({
     const arrive = () => {
       if (next.place === "oval" && loc.place !== "oval") {
         setChat([]);
-        say("chief", `${greeting()}. ${briefing(sim, stopped, names)}`, ROOMS.filter((r) => sim[r.id]?.state === "waiting").map((r) => r.id));
+        const fresh = ROOMS.filter((r) => unread(r.id));
+        const news = fresh.length
+          ? ` New for you: ${fresh.map((r) => `${names[r.floorId] ?? r.floorId} ${DEPTS[r.dept].name} finished "${unread(r.id)?.title}"`).join("; ")}. Open the room to read it.`
+          : "";
+        say("chief", `${greeting()}. ${briefing(sim, stopped, names)}${news}`, [...ROOMS.filter((r) => sim[r.id]?.state === "waiting").map((r) => r.id), ...fresh.map((r) => r.id)]);
         setTalking(true);
       }
       setLoc(next);
@@ -448,7 +488,11 @@ export default function House3D({
                 >
                   <Dot color={stateColor(st, r.dept)} />
                   <span className="flex-1">{DEPTS[r.dept].name}</span>
-                  <span style={{ color: STATE_TEXT[st], fontWeight: st === "idle" ? 400 : 600, fontSize: 12 }}>{STATE_LABEL[st]}</span>
+                  {st === "idle" && unread(r.id) ? (
+                    <span style={{ color: C.terracotta, fontWeight: 700, fontSize: 12 }}>New for you</span>
+                  ) : (
+                    <span style={{ color: STATE_TEXT[st], fontWeight: st === "idle" ? 400 : 600, fontSize: 12 }}>{STATE_LABEL[st]}</span>
+                  )}
                 </button>
               );
             })}
@@ -723,6 +767,20 @@ export default function House3D({
                 <p className="mt-1.5" style={{ font: `400 15px/1.5 ${SANS}`, color: "#4a3b34" }}>
                   {stopped ? "Nothing runs until you resume." : roomSim.task}
                 </p>
+                {(() => {
+                  const fresh = unread(room.id);
+                  if (!fresh) return null;
+                  return (
+                    <div className="mt-3 rounded-2xl p-4" style={{ background: "#FFF3D6", border: `1.5px solid ${C.terracotta}` }}>
+                      <Eyebrow color={C.terracotta}>New for you</Eyebrow>
+                      <p className="mt-1" style={{ font: `300 21px/1.2 ${SERIF}`, letterSpacing: "-0.02em" }}>{fresh.title}</p>
+                      <p style={{ font: `400 13px/1.4 ${SANS}`, color: "#7a6a62" }}>Finished {fresh.time}</p>
+                      <button type="button" onClick={() => openOutput(String(fresh.id), fresh.title, fresh.time)} className="mt-3" style={btnPrimary}>
+                        {room.dept === "outreach" ? "Open the call list" : "Read it"}
+                      </button>
+                    </div>
+                  );
+                })()}
                 {isLive && (
                   <div className="mt-3 flex flex-wrap items-center gap-3">
                     <button type="button" onClick={() => runNow(room.id)} disabled={roomState === "working" || stopped} style={{ ...btnGhost, minHeight: 42, borderColor: C.ink, opacity: roomState === "working" || stopped ? 0.45 : 1 }}>
@@ -783,14 +841,24 @@ export default function House3D({
               {!collapsed && (
                 <>
               <section className="mt-7">
-                <Eyebrow>Agents this room can hold</Eyebrow>
+                <Eyebrow>Agents for this department</Eyebrow>
                 <ul className="mt-2 flex flex-col">
-                  {(CATALOGUE.find((d) => d.id === CATALOGUE_ID[room.dept])?.agents ?? []).map((a) => (
-                    <li key={a.name} className="border-b py-2" style={{ borderColor: C.panel }}>
-                      <div style={{ font: `600 14px/1.3 ${SANS}` }}>{a.name}</div>
-                      <div style={{ font: `400 13px/1.4 ${SANS}`, color: "#7a6a62" }}>{a.job}</div>
-                    </li>
-                  ))}
+                  {[...(CATALOGUE.find((d) => d.id === CATALOGUE_ID[room.dept])?.agents ?? [])]
+                    .sort((a, b) => Number(isBuilt(room.id, b.name)) - Number(isBuilt(room.id, a.name)))
+                    .map((a) => {
+                      const built = isLive && isBuilt(room.id, a.name);
+                      return (
+                        <li key={a.name} className="flex items-start justify-between gap-3 border-b py-2" style={{ borderColor: C.panel, opacity: built ? 1 : 0.55 }}>
+                          <div>
+                            <div style={{ font: `600 14px/1.3 ${SANS}` }}>{a.name}</div>
+                            <div style={{ font: `400 13px/1.4 ${SANS}`, color: "#7a6a62" }}>{a.job}</div>
+                          </div>
+                          {isLive && (
+                            <span style={{ flex: "none", font: `600 11px/1.6 ${SANS}`, color: built ? "#1c7046" : "#7a6a62" }}>{built ? "Working" : "Not built yet"}</span>
+                          )}
+                        </li>
+                      );
+                    })}
                 </ul>
               </section>
               <section className="mt-7">
@@ -801,7 +869,7 @@ export default function House3D({
                   </p>
                 )}
                 <ul className="mt-2 flex flex-col gap-2">
-                  {roomSim.outputs.map((o) => {
+                  {(showOlder ? roomSim.outputs : roomSim.outputs.slice(0, 1)).map((o) => {
                     const key = String(o.id);
                     const given = scores[key] ?? o.score ?? null;
                     return (
@@ -883,6 +951,11 @@ export default function House3D({
                     );
                   })}
                 </ul>
+                {roomSim.outputs.length > 1 && (
+                  <button type="button" onClick={() => setShowOlder(!showOlder)} className="mt-2" style={{ ...btnGhost, minHeight: 38, padding: "0 14px", fontSize: 13 }}>
+                    {showOlder ? "Hide older work" : `Show older work (${roomSim.outputs.length - 1})`}
+                  </button>
+                )}
               </section>
 
               <section className="mt-7">
@@ -964,8 +1037,11 @@ export default function House3D({
                   Close
                 </button>
               </header>
-              <div data-lenis-prevent className="flex-1 overflow-y-auto px-6 py-5 md:px-10">
-                <Markdown text={viewing.body} />
+              <div data-lenis-prevent className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 md:px-10">
+                {(() => {
+                  const leads = viewing.title.startsWith("Shortlist") ? parseShortlist(viewing.body) : [];
+                  return leads.length > 0 ? <CallList leads={leads} report={viewing.body} /> : <Markdown text={viewing.body} />;
+                })()}
               </div>
             </motion.article>
           </motion.div>
