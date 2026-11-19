@@ -120,7 +120,7 @@ test("bootstrap: two instances starting together set the database up once; a sec
   assert.deepEqual([outreach.value.areas, carriedClinics.excluded_groups, carriedClinics.leak_assumptions.enquiries_a_month, outreach.version, outreach.reason],
     [["Carriedton", "Carriedham"], ["Fixture Group"], { low: 11, high: 44 }, 1, "carried over from the development database at first boot"]);
   // the blob was in the shape from before there was more than one kind: it arrives in the current one, clinics on and the rest off
-  assert.deepEqual(outreach.value.business_types.map((t) => [t.id, t.enabled]), [["clinics", true], ["solicitors", false], ["financial-advisers", false], ["estate-agents", false], ["accountants", false], ["trades", false]]);
+  assert.deepEqual(outreach.value.business_types.map((t) => [t.id, t.enabled]), [["clinics", true], ["solicitors", false], ["financial-advisers", false], ["estate-agents", false], ["accountants", false], ["trades", false], ["pharmacies", false], ["property-developers", false]]);
   assert.deepEqual([(await current("schedule", "outreach")).value.daily_at, (await current("budget", "outreach")).value, (await current("rung", "enquiry.send_email")).value, (await current("cap", "enquiries_per_day")).value],
     ["07:30", { daily_limit_gbp: 3 }, { rung: 2 }, { limit: 12 }]);
   // what was not carried took the seed's default
@@ -183,7 +183,7 @@ test("bootstrap: two instances starting together set the database up once; a sec
   assert.deepEqual([outreachNow.value.capture_weights.followed_up, outreachNow.value.capture_weights.within_15_minutes], [5, 50]);
   const tradesNow = outreachNow.value.business_types.find((t) => t.id === "trades");
   assert.deepEqual([tradesNow.leak_assumptions.enquiries_a_month, tradesNow.leak_assumptions.share_lost_to_a_slow_reply, tradesNow.search_phrases.length, outreachNow.value.business_types.length, outreachNow.value.areas],
-    [{ low: 5, high: 15 }, { low: 0.1, high: 0.3 }, 5, 6, ["Carriedton", "Carriedham"]]);
+    [{ low: 5, high: 15 }, { low: 0.1, high: 0.3 }, 5, 8, ["Carriedton", "Carriedham"]]);
   assert.match(afterPatch.filter((r) => r.key === "outreach.patch").at(-1).value.sha256, /^[0-9a-f]{64}$/);
   // a restart with the same patch applies nothing; so does one with the same patch written with its keys in another order
   assert.equal((await boot({ settingsPatch: encode(patch) })).patchApplied, 0);

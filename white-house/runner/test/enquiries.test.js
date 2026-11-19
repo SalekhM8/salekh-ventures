@@ -1244,7 +1244,7 @@ test("reset-attempts: failures that were ours are undone, for businesses still w
 
 test("the kinds of business: six are seeded, each with its own rules; the old single kind is carried into the list; a kind is seen through forType", () => {
   assert.deepEqual(S.business_types.map((t) => [t.id, t.enabled, t.email_test]), [
-    ["clinics", true, true], ["solicitors", true, true], ["financial-advisers", true, true], ["estate-agents", true, true], ["accountants", true, true], ["trades", true, true],
+    ["clinics", true, true], ["solicitors", true, true], ["financial-advisers", true, true], ["estate-agents", true, true], ["accountants", true, true], ["trades", true, true], ["pharmacies", true, true], ["property-developers", true, true],
   ]);
   assert.deepEqual(BUILT_IN_TYPE_IDS, S.business_types.map((t) => t.id));
   assert.ok(!S.business_types.some((t) => /shop|commerce|retail/i.test(`${t.id} ${t.name}`)), "online shops are not a kind: there is no enquiry-to-booking path to test");
@@ -1256,7 +1256,7 @@ test("the kinds of business: six are seeded, each with its own rules; the old si
   const trades = S.business_types.find((t) => t.id === "trades");
   assert.match(trades.card_note, /answer the phone and messages far more than email.*may under-report/);
   assert.deepEqual(trades.search_phrases, ["kitchen fitters", "bathroom fitters", "roofing contractors", "driveway installers", "solar panel installers"]);
-  assert.deepEqual(S.business_types.filter((t) => t.id !== "clinics").map((t) => t.excluded_groups.length), [0, 0, 0, 0, 0], "the clinic groups stay with the clinics");
+  assert.deepEqual(S.business_types.filter((t) => t.id !== "clinics").map((t) => t.excluded_groups.length), [0, 0, 0, 0, 0, 0, 0], "the clinic groups stay with the clinics");
   assert.ok(S.business_types[0].excluded_groups.includes("PortmanDentex") && S.business_types[0].forbidden_topics.includes("toothache"));
   // seen for one kind: its groups, its forbidden topics, its assumptions, its name
   assert.deepEqual([S.business_type, S.type.id, forType(S, "solicitors").business_type, forType(S, "solicitors").excluded_groups, forType(S, "no-such-kind").type.id],
@@ -1265,7 +1265,7 @@ test("the kinds of business: six are seeded, each with its own rules; the old si
 
   // ---- settings stored before there was more than one kind ----
   const old = parseOutreachSettings({ business_type: "private dental and aesthetics clinics", area: "England", excluded_groups: ["Fixture Group"], enquiry_forbidden_words: ["fixtureword"], job_search_hint: "dental", leak_assumptions: { enquiries_a_month: { low: 5, high: 6 } } });
-  assert.deepEqual(old.business_types.map((t) => [t.id, t.enabled]), [["clinics", true], ["solicitors", false], ["financial-advisers", false], ["estate-agents", false], ["accountants", false], ["trades", false]],
+  assert.deepEqual(old.business_types.map((t) => [t.id, t.enabled]), [["clinics", true], ["solicitors", false], ["financial-advisers", false], ["estate-agents", false], ["accountants", false], ["trades", false], ["pharmacies", false], ["property-developers", false]],
     "a house that was looking for clinics goes on looking for clinics until another kind is switched on");
   const clinics = old.business_types[0];
   assert.deepEqual([clinics.name, clinics.search_phrases, clinics.excluded_groups, clinics.forbidden_topics, clinics.job_search_hint, clinics.leak_assumptions.enquiries_a_month, clinics.leak_assumptions.share_lost_to_a_slow_reply],
@@ -1600,7 +1600,7 @@ test("with nobody asked, the checks are the gate: a draft must name one specific
   assert.equal(serviceFor(analysis("Roofing and guttering", "New roofs"), forType(S, "trades")), "a new roof");
   assert.equal(serviceFor(null, law), null);
   for (const t of S.business_types) assert.ok(t.default_service.length > 5 && (t.target_services.length >= 2), t.id);
-  assert.deepEqual(S.business_types.filter((t) => t.require_target_service).map((t) => t.id), ["solicitors", "financial-advisers", "accountants", "trades"]);
+  assert.deepEqual(S.business_types.filter((t) => t.require_target_service).map((t) => t.id), ["solicitors", "financial-advisers", "accountants", "trades", "pharmacies", "property-developers"]);
 });
 
 test("sending windows: every day from 07:00 to 21:30 in the tenant's own time, divided into working hours, weekday evenings and weekends; never in the small hours", () => {

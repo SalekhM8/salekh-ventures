@@ -154,7 +154,7 @@ test("seed: tenant one, an owner from the environment, four floors, budgets, and
   assert.deepEqual([outreach.value.area, outreach.value.find_per_run], ["England", 50]);
   // every kind of business is written out in full, switched on, with its own rules: nothing is left to a default nobody can see
   assert.deepEqual(outreach.value.business_types.map((t) => [t.id, t.enabled, t.email_test]), [
-    ["clinics", true, true], ["solicitors", true, true], ["financial-advisers", true, true], ["estate-agents", true, true], ["accountants", true, true], ["trades", true, true],
+    ["clinics", true, true], ["solicitors", true, true], ["financial-advisers", true, true], ["estate-agents", true, true], ["accountants", true, true], ["trades", true, true], ["pharmacies", true, true], ["property-developers", true, true],
   ]);
   assert.ok(!("business_type" in outreach.value) && !("excluded_groups" in outreach.value), "the single kind of the old shape is gone from what is stored");
   assert.ok(outreach.value.areas.length >= 30 && outreach.value.areas.includes("Manchester"), "the places to work through are in config, where they can be edited");

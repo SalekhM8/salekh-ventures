@@ -211,6 +211,36 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     default_service: "a new driveway",
     ask_for: "the owner",
   },
+  pharmacies: {
+    name: "independent pharmacies offering private services",
+    search_phrases: ["independent pharmacy travel clinic", "pharmacy weight loss clinic"],
+    high_value_guidance: "The private service with the largest fee the pages show, for example a course of travel vaccinations or a weight loss programme.",
+    enquiry_guidance: "Ask the price of one named private service (for example travel vaccinations or ear wax removal) and when the next appointment is.",
+    forbidden_topics: [...HEALTH_WORDS, "my weight", "i weigh", "my bmi", "prescription", "my gp", "side effect", "dose", "which vaccine", "do i need", "should i take"],
+    forbidden_reason: "it describes health or asks for advice. Ask only the price of the service and when the next appointment is",
+    target_services: [
+      { name: "travel vaccinations", terms: ["travel vacc", "travel clinic", "yellow fever", "travel health"] }, { name: "a weight loss programme", terms: ["weight loss", "weight management", "mounjaro", "wegovy"] },
+      { name: "ear wax removal", terms: ["ear wax", "microsuction"] },
+    ],
+    require_target_service: true,
+    default_service: "travel vaccinations",
+    ask_for: "the pharmacy owner or the manager",
+  },
+  "property-developers": {
+    name: "property developers selling new homes",
+    search_phrases: ["new homes developer", "property developers"],
+    high_value_guidance: "The price of a home on their current or upcoming development, if a page gives one in pounds.",
+    enquiry_guidance: "Ask what prices start from for a home on their current development and when a viewing could be arranged.",
+    forbidden_topics: ["my mortgage", "my deposit", "my income", "i earn", "we earn", "my house", "our house", "my flat", "the address", "i live", "we live", "chain", "my offer", "reserve", "help to buy"],
+    forbidden_reason: "it gives money or property details of its own or makes an offer. Ask only what prices start from and when a viewing could be arranged, and do not book one",
+    target_services: [
+      { name: "a new home on their current development", terms: ["new home", "development", "plots", "show home", "coming soon", "now selling", "bedroom homes"] },
+      { name: "an apartment on their current development", terms: ["apartment", "new build flat", "penthouse"] },
+    ],
+    require_target_service: true,
+    default_service: "a new home on their current development",
+    ask_for: "the sales manager or a director",
+  },
 };
 export const BUILT_IN_TYPE_IDS = Object.keys(BUILT_IN_TYPES);
 

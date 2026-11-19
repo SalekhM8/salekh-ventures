@@ -84,8 +84,8 @@ try {
     console.log(`  sending:          every day ${s.enquiry_send_from} to ${s.enquiry_send_until}, spread across ${s.enquiry_slots.join(", ")} (working day ${s.working_hours_from} to ${s.working_hours_until} on days ${s.working_days.join(",")}; 1 is Monday)`);
     console.log(`  non-working dates: ${s.non_working_dates.length ? s.non_working_dates.join(", ") : "none set. Bank holidays are NOT known to the system: add them to non_working_dates"}`);
     console.log(`  no-send dates:    ${s.enquiry_no_send_dates.length ? s.enquiry_no_send_dates.join(", ") : "none set. Bank holidays are NOT known to the system: add them to enquiry_no_send_dates"}`);
-    console.log(`  sending stops for the day after: more than ${s.enquiry_max_failures_a_day} failed sends or bounces, any reply that reads as a complaint, or the mailbox refusing the login`);
-    console.log(`  shortlist rule:   capture score at or below ${s.capture_threshold}, estimated leak (high end) at least £${s.min_estimated_leak} when one can be made`);
+    console.log(`  sending stops for the day after: more than ${s.enquiry_max_failures_a_day} failed sends or bounces, 3 or more complaints in a day (or more than 1 in 10 sent, once 20 have gone), or the mailbox refusing the login. One complaint only blocks that business`);
+    console.log(`  shortlist:        everyone tested, worst first. No cut-off`);
   } else {
     throw new Error("Use: suppress, or settings");
   }
