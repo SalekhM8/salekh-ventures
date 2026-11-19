@@ -103,14 +103,14 @@ test("bootstrap: two instances starting together set the database up once; a sec
   // ---- the first boot, by two instances at the same moment ----
   const [one, two] = await Promise.all([boot({ carried: parseCarriedConfig(encode(blob())) }), boot({ carried: parseCarriedConfig(encode(blob())) })]);
   assert.deepEqual([one.tenantId, two.tenantId], [TENANT, TENANT], "the tenant has the id that was given, so it matches the developer's machine");
-  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [17, 1], "each migration applied once; one of the two was the first boot");
+  assert.deepEqual([one.migrationsApplied.length + two.migrationsApplied.length, [one.firstBoot, two.firstBoot].filter(Boolean).length], [18, 1], "each migration applied once; one of the two was the first boot");
   assert.deepEqual(one.roles, [`${PREFIX}_agent`, `${PREFIX}_gateway`, `${PREFIX}_ui`]);
   const counts = async () => (await bootRows(
     `select (select count(*)::int from tenants) as tenants, (select count(*)::int from businesses) as floors, (select count(*)::int from members) as members,
             (select count(*)::int from config_versions) as config, (select count(*)::int from suppressions) as suppressions, (select count(*)::int from schema_migrations) as migrations,
             (select count(*)::int from prospects) as prospects, (select count(*)::int from approvals) as approvals`))[0];
   const first = await counts();
-  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 17, 0, 0]);
+  assert.deepEqual([first.tenants, first.floors, first.members, first.suppressions, first.migrations, first.prospects, first.approvals], [1, 4, 1, 1, 18, 0, 0]);
   assert.deepEqual(await bootRows("select slug, timezone from tenants"), [{ slug: "fixture-boot", timezone: "Europe/London" }]);
 
   // what was carried is in force, as version 1, and says where it came from

@@ -384,7 +384,9 @@ export default function House3D({
         const news = fresh.length
           ? ` New for you: ${fresh.map((r) => `${names[r.floorId] ?? r.floorId} ${DEPTS[r.dept].name} finished "${unread(r.id)?.title}"`).join("; ")}. Open the room to read it.`
           : "";
-        say("chief", `${greeting()}. ${briefing(sim, stopped, names)}${news}`, [...ROOMS.filter((r) => sim[r.id]?.state === "waiting").map((r) => r.id), ...fresh.map((r) => r.id)]);
+        // The Engineering watcher's word on Outreach comes first: a problem is the thing to hear.
+        const watch = isLive ? live.health.map((h) => (live.health.length > 1 ? `${names[h.business] ?? h.business}: ${h.line}` : h.line)).join(" ") : "";
+        say("chief", `${greeting()}. ${watch ? `${watch} ` : ""}${briefing(sim, stopped, names)}${news}`, [...ROOMS.filter((r) => sim[r.id]?.state === "waiting").map((r) => r.id), ...fresh.map((r) => r.id)]);
         setTalking(true);
       }
       setLoc(next);

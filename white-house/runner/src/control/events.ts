@@ -16,7 +16,7 @@ export const EVENT_TYPES = [
   "approved", "rejected", "expired", "voided", "answer_refused",
   "executing", "executed", "execution_failed", "verified", "verify_failed",
   "demoted", "marked_wrong",
-  "kill_switch_engaged", "kill_switch_resumed", "config_changed",
+  "kill_switch_engaged", "kill_switch_resumed", "config_changed", "health",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

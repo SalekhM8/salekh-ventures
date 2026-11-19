@@ -13,6 +13,8 @@ import { createDb, isUuid } from "./control/db.js";
 import { installProcessGuard } from "./guard.js";
 import { createRuntime } from "./runtime.js";
 import { createScheduler } from "./scheduler.js";
+import { createWatcher } from "./watcher.js";
+import { breakerToday } from "./outreach/enquiries.js";
 import { apiKeyEnvName } from "./seed.js";
 import { createRunnerServer } from "./server.js";
 
@@ -125,7 +127,13 @@ function buildRuntime() {
   });
   // Rooms with a daily time in their schedule are started by the runner itself, once a day.
   const scheduler = createScheduler({ db: gatewayDb, tenantId: env.WH_TENANT_ID as string, startRun: (roomId) => runtime.startRun(roomId, {}) as Promise<{ status: number; reason?: string; runId?: string }> });
-  return { runtime, scheduler };
+  // The Engineering watcher: once an hour, a plain line on whether Outreach is all right, for the Chief of Staff. It only reports.
+  const watcher = createWatcher({
+    db: gatewayDb, tenantId: env.WH_TENANT_ID as string,
+    mailboxes: { test: mailbox !== null, owner: owner.mailbox !== null },
+    stopToday: (now) => breakerToday(gatewayDb, env.WH_TENANT_ID as string, now),
+  });
+  return { runtime, scheduler, watcher };
 }
 
 const built = buildRuntime();
@@ -139,6 +147,7 @@ server.listen(port, host, () => {
   // Can mail leave this server, and can the mailbox be read from it? One line each, with the error code and nothing else.
   // Then, if asked, enquiries that never reached the mail server are put back in the queue. Both before anything is sent.
   built?.scheduler.start(60_000);
+  built?.watcher.start(60 * 60_000);
   if (runtime) {
     void (async () => {
       // A run left "running" by a process that is gone would leave its room stuck for good. Each is closed as failed, and a

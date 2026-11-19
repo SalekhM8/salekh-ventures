@@ -106,6 +106,8 @@ export interface House {
   killSwitch: { global: boolean; floors: string[] };
   rooms: HouseRoom[];
   handoffs: { id: string; from: string; to: string; at: string }[];
+  /** The Engineering watcher's latest line for each floor's Outreach: what the Chief of Staff tells the owner. */
+  health: { business: string; at: string; ok: boolean; line: string }[];
 }
 
 export type Answer<T> = ({ status: 200 | 202 } & T) | { status: 404 } | { status: 409 | 422; reason: string };
@@ -419,7 +421,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
             : { id: `evt_${e.seq}`, from: room, to: `${slugOf.get(e.business_id)}:${e.handed_to}`, at: e.created_at.toISOString() };
         });
 
-      return { generatedAt: now.toISOString(), killSwitch: await killSwitchState(tx), rooms, handoffs };
+      const checked = await tx.query(
+        `select distinct on (business_id) business_id, summary, reason_code, created_at
+           from events where type = 'health' and business_id is not null order by business_id, seq desc`,
+      );
+      const health = checked.rows
+        .filter((e) => slugOf.has(e.business_id))
+        .map((e) => ({ business: slugOf.get(e.business_id) as string, at: e.created_at.toISOString(), ok: e.reason_code === "outreach_fine", line: e.summary as string }));
+
+      return { generatedAt: now.toISOString(), killSwitch: await killSwitchState(tx), rooms, handoffs, health };
     });
     cache = { at: now.getTime(), house: built };
     return built;

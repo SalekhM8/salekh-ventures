@@ -24,6 +24,8 @@ type ApiHouse = {
   killSwitch: { global: boolean; floors: string[] };
   rooms: ApiRoom[];
   handoffs: { id: string; from: string; to: string; at: string }[];
+  /** The Engineering watcher's latest line per floor (older runners send none). */
+  health?: { business: string; at: string; ok: boolean; line: string }[];
 };
 
 export type CallOutcome = "no_answer" | "call_back" | "interested" | "meeting_booked" | "not_interested" | "wrong_person";
@@ -247,7 +249,7 @@ export function useLiveHouse(enabled = true) {
   const setFollowupRung = useCallback(async (roomId: string, rung: 2 | 3) => answer(await call(`v1/rooms/${toApi(roomId)}/followup-rung`, { rung })), []);
 
   return {
-    connected, stopped: house?.killSwitch.global ?? false, sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome,
+    connected, stopped: house?.killSwitch.global ?? false, health: house?.health ?? [], sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome,
     followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung,
   };
 }
