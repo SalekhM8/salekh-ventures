@@ -12,12 +12,17 @@
    After Interested, Call back or Meeting booked with a note, the runner
    writes a follow-up email. It shows on the card to check, change, send,
    copy or drop. Nothing is sent without Salekh pressing Send, unless he
-   has switched follow-ups to "send without asking". */
+   has switched follow-ups to "send without asking".
+
+   After Interested or Meeting booked, or when he presses "Make a plan",
+   the Closer writes a one-page plan for the next call: what we found, what
+   we'd set up, what they might say, and the price. It is for him only and
+   is never sent to anyone. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { C, SANS, SERIF } from "./model";
 import { Markdown } from "./Markdown";
-import type { CallOutcome, CallRecord, Followup, FollowupAnswer, FollowupEdit, FollowupList, OutcomeInput, ProspectCalls } from "./live";
+import type { CallOutcome, CallRecord, Followup, FollowupAnswer, FollowupEdit, FollowupList, OutcomeInput, Plan, PlanList, ProspectCalls } from "./live";
 
 export type Lead = {
   rank: number;
@@ -196,6 +201,12 @@ export type FollowupApi = {
   setRung: (roomId: string, rung: 2 | 3) => Promise<FollowupAnswer>;
 };
 
+/** The Closer's plans through the runner. Each function must keep its identity between renders (useCallback). */
+export type PlanApi = {
+  load: (roomId: string) => Promise<PlanList | null>;
+  request: (prospectId: string) => Promise<string | null>;
+};
+
 const tone = (s: number | null) => (s === null ? "#8a7a72" : s < 40 ? "#B3261E" : s < 70 ? "#B26A00" : "#1c7046");
 
 export function CallList({
@@ -206,6 +217,7 @@ export function CallList({
   saveOutcome,
   putBack,
   followupApi,
+  planApi,
 }: {
   leads: Lead[];
   report: string;
@@ -214,6 +226,7 @@ export function CallList({
   saveOutcome?: CallsApi["save"];
   putBack?: CallsApi["putBack"];
   followupApi?: FollowupApi;
+  planApi?: PlanApi;
 }) {
   const calls = roomId && loadCalls && saveOutcome ? true : false;
   const loadFollowups = followupApi?.load;
@@ -240,6 +253,31 @@ export function CallList({
     const timer = setInterval(() => void reloadFollowups(), 4000);
     return () => clearInterval(timer);
   }, [writing, reloadFollowups]);
+  const loadPlans = planApi?.load;
+  const [pl, setPl] = useState<PlanList | null>(null);
+  const reloadPlans = useCallback(async () => {
+    if (!roomId || !loadPlans) return;
+    const got = await loadPlans(roomId);
+    if (got) setPl(got);
+  }, [roomId, loadPlans]);
+  useEffect(() => {
+    if (!roomId || !loadPlans) return;
+    let live = true;
+    void loadPlans(roomId).then((got) => {
+      if (live && got) setPl(got);
+    });
+    return () => {
+      live = false;
+    };
+  }, [roomId, loadPlans]);
+  // While a plan is being written, look again every few seconds.
+  const planning = (pl?.making.length ?? 0) > 0;
+  useEffect(() => {
+    if (!planning) return;
+    const timer = setInterval(() => void reloadPlans(), 4000);
+    return () => clearInterval(timer);
+  }, [planning, reloadPlans]);
+  const planOf = useMemo(() => new Map((pl?.plans ?? []).map((p) => [p.prospectId, p])), [pl]);
   /** The newest follow-up for each business. */
   const followupOf = useMemo(() => {
     const by = new Map<string, Followup>();
@@ -403,6 +441,7 @@ export function CallList({
                     onSaved={async () => {
                       await load();
                       await reloadFollowups();
+                      await reloadPlans();
                     }}
                     followups={Boolean(followupApi)}
                     why={!calls ? "Not connected to the runner, so outcomes cannot be saved here." : "Record outcomes from tomorrow's list."}
@@ -417,6 +456,16 @@ export function CallList({
                       api={followupApi}
                       prospectId={id}
                       onChanged={reloadFollowups}
+                    />
+                  )}
+
+                  {id && planApi && pl && (
+                    <PlanCard
+                      plan={planOf.get(id) ?? null}
+                      writing={pl.making.includes(id)}
+                      notInterested={record?.latest?.outcome === "not_interested"}
+                      request={() => planApi.request(id)}
+                      onChanged={reloadPlans}
                     />
                   )}
 
@@ -949,6 +998,75 @@ function FollowupCard({
         <p className="mt-2" style={{ font: `400 13px/1.45 ${SANS}`, color: "#4a3b34" }}>
           {message}
         </p>
+      )}
+    </div>
+  );
+}
+
+const PLAN_WHY: Record<string, string> = {
+  not_interested: "They said not interested, so there's no plan to make.",
+  standby: "This is the standby runner. Try again in a minute.",
+  not_signed_in: "Sign in again to make a plan.",
+  runner_unreachable: "Couldn't reach the runner. Try again.",
+};
+
+/** The Closer's plan for the next call: shown folded, one tap to read, and "Make a plan" to write one (again). */
+function PlanCard({
+  plan,
+  writing,
+  notInterested,
+  request,
+  onChanged,
+}: {
+  plan: Plan | null;
+  writing: boolean;
+  notInterested: boolean;
+  request: () => Promise<string | null>;
+  onChanged: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (notInterested && !plan) return null;
+  const make = async () => {
+    setBusy(true);
+    setError("");
+    const why = await request();
+    setBusy(false);
+    if (why) setError(PLAN_WHY[why] ?? `Couldn't make a plan (${why.replace(/_/g, " ")}).`);
+    await onChanged();
+  };
+  return (
+    <div className="mt-3 rounded-xl p-3" style={{ border: `1.5px solid ${C.blush}`, background: C.surface }}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span style={{ font: `600 10.5px/1.4 ${SANS}`, letterSpacing: "0.18em", textTransform: "uppercase", color: C.terracotta }}>
+          Plan for the next call
+        </span>
+        <span style={{ font: `400 12.5px/1.4 ${SANS}`, color: "#7a6a62" }}>
+          {writing ? "Writing it now…" : plan ? `Written ${when(plan.createdAt)} · for you only` : "For you only, never sent"}
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {plan && (
+          <button type="button" onClick={() => setOpen(!open)} style={pill}>
+            {open ? "Hide plan" : "Read plan"}
+          </button>
+        )}
+        {!notInterested && (
+          <button type="button" onClick={() => void make()} disabled={busy || writing} style={{ ...pill, opacity: busy || writing ? 0.6 : 1 }}>
+            {plan ? "Write it again" : "Make a plan"}
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="mt-2" style={{ font: `400 13px/1.45 ${SANS}`, color: "#B3261E" }}>
+          {error}
+        </p>
+      )}
+      {plan && open && (
+        <div className="mt-3 border-t pt-3" style={{ borderColor: C.blush }}>
+          <Markdown text={plan.body} />
+        </div>
       )}
     </div>
   );

@@ -113,6 +113,14 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.requestFollowup(b as string, body);
         return r.status === 200 ? send(res, 202, { ok: true }) : fail(r);
       }
+      case "GET rooms/:id/plans": {
+        const r = await rt.listPlans(b as string);
+        return r.status === 200 ? send(res, 200, { plans: r.plans, making: r.making }) : fail(r);
+      }
+      case "POST prospects/:id/plan": {
+        const r = await rt.requestPlan(b as string);
+        return r.status === 200 ? send(res, 202, { ok: true }) : fail(r);
+      }
       case "POST followups/:id": {
         const r = await rt.editFollowup(b as string, body);
         return r.status === 200 ? send(res, 200, { followup: r.followup }) : fail(r);

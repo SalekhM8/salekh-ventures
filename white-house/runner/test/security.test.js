@@ -12,7 +12,7 @@ const ALL_TABLES = [
   "actions", "budget_ledger", "metrics", "memory_notes", "scores", "eval_cases", "eval_runs",
   "queue_items", "notifications", "devices", "public_feed", "outputs",
   "prospects", "prospect_events", "suppressions", "fetched_pages", "prospect_competitors", "search_coverage", "enquiries",
-  "call_outcomes", "followups", "owner_put_backs",
+  "call_outcomes", "followups", "owner_put_backs", "plans",
 ];
 
 /** Two tenants, each with rows in every table. */
@@ -73,6 +73,7 @@ async function fill(w) {
   await h.admin.query(`insert into call_outcomes (tenant_id, business_id, prospect_id, outcome, note) values ($1, $2, $3, 'no_answer', 'fixture note')`, [...t, one]);
   await h.admin.query(`insert into followups (tenant_id, business_id, prospect_id, subject, body) values ($1, $2, $3, 'fixture subject', 'fixture body')`, [...t, one]);
   await h.admin.query(`insert into owner_put_backs (tenant_id, business_id, prospect_id, reason) values ($1, $2, $3, 'fixture reason')`, [...t, one]);
+  await h.admin.query(`insert into plans (tenant_id, business_id, prospect_id, trigger, body) values ($1, $2, $3, 'asked', 'fixture plan')`, [...t, one]);
 }
 
 before(async () => {
@@ -283,7 +284,7 @@ test("the migration runner applies each file once and notices an edited file", a
   const { migrate } = await import("../dist/migrate.js");
   assert.deepEqual(await migrate({ connectionString: adminUrl() }), []);
   const applied = await rows(h, "select name from schema_migrations order by name");
-  assert.equal(applied.length, 20);
+  assert.equal(applied.length, 21);
   assert.match(applied[0].name, /^0001_/);
   await h.admin.query("update schema_migrations set checksum = 'edited' where name = $1", [applied[7].name]);
   try {
