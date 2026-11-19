@@ -183,7 +183,7 @@ test("bootstrap: two instances starting together set the database up once; a sec
   assert.deepEqual([outreachNow.value.capture_weights.followed_up, outreachNow.value.capture_weights.within_15_minutes], [5, 50]);
   const tradesNow = outreachNow.value.business_types.find((t) => t.id === "trades");
   assert.deepEqual([tradesNow.leak_assumptions.enquiries_a_month, tradesNow.leak_assumptions.share_lost_to_a_slow_reply, tradesNow.search_phrases.length, outreachNow.value.business_types.length, outreachNow.value.areas],
-    [{ low: 5, high: 15 }, { low: 0.1, high: 0.3 }, 5, 8, ["Carriedton", "Carriedham"]]);
+    [{ low: 5, high: 15 }, { low: 0.2, high: 0.4 }, 5, 8, ["Carriedton", "Carriedham"]]);
   assert.match(afterPatch.filter((r) => r.key === "outreach.patch").at(-1).value.sha256, /^[0-9a-f]{64}$/);
   // a restart with the same patch applies nothing; so does one with the same patch written with its keys in another order
   assert.equal((await boot({ settingsPatch: encode(patch) })).patchApplied, 0);

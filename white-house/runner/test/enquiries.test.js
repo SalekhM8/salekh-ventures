@@ -1250,8 +1250,8 @@ test("the kinds of business: six are seeded, each with its own rules; the old si
   assert.ok(!S.business_types.some((t) => /shop|commerce|retail/i.test(`${t.id} ${t.name}`)), "online shops are not a kind: there is no enquiry-to-booking path to test");
   for (const t of S.business_types) {
     assert.ok(t.search_phrases.length >= 1 && t.enquiry_guidance.length > 20 && t.high_value_guidance.length > 20 && t.forbidden_topics.length >= 10 && t.forbidden_reason.length > 20, t.id);
-    // every kind's assumptions are the same placeholders until Salekh edits them
-    assert.deepEqual(t.leak_assumptions, { enquiries_a_month: { low: 20, high: 60 }, share_lost_to_a_slow_reply: { low: 0.1, high: 0.3 }, share_that_would_have_bought: { low: 0.1, high: 0.25 }, share_arriving_out_of_hours: { low: 0.3, high: 0.5 } }, t.id);
+    // every kind has its own leak figures, each a range
+    for (const k of ["enquiries_a_month", "share_lost_to_a_slow_reply", "share_that_would_have_bought", "share_arriving_out_of_hours"]) assert.ok(t.leak_assumptions[k].low > 0 && t.leak_assumptions[k].low <= t.leak_assumptions[k].high, `${t.id} ${k}`);
   }
   const trades = S.business_types.find((t) => t.id === "trades");
   assert.match(trades.card_note, /answer the phone and messages far more than email.*may under-report/);
@@ -2382,7 +2382,11 @@ test("a default that has changed in code reaches settings stored with the old de
   assert.deepEqual([chosen.value.max_places_calls_per_run, chosen.value.enquiry_send_until, chosen.moved], [25, "18:00", ["enquiry_send_from", "enquiry_send_days"]]);
   // once applied, a value put back to the old figure on purpose stays there
   assert.deepEqual(adoptNewDefaults(stored, DEFAULTS_VERSION), { value: stored, moved: [] });
-  assert.equal(DEFAULTS_VERSION, 1);
+  assert.equal(DEFAULTS_VERSION, 2);
+  // change 2: a kind still holding the old shared leak placeholder takes its own figures; one somebody changed is left alone
+  const old = { enquiries_a_month: { low: 20, high: 60 }, share_lost_to_a_slow_reply: { low: 0.1, high: 0.3 }, share_that_would_have_bought: { low: 0.1, high: 0.25 }, share_arriving_out_of_hours: { low: 0.3, high: 0.5 } };
+  const kinds = adoptNewDefaults({ business_types: [{ id: "pharmacies", leak_assumptions: old }, { id: "trades", leak_assumptions: { ...old, enquiries_a_month: { low: 5, high: 15 } } }] }, 1);
+  assert.deepEqual([kinds.value.business_types[0].leak_assumptions.share_that_would_have_bought, kinds.value.business_types[1].leak_assumptions.enquiries_a_month, kinds.moved], [{ low: 0.3, high: 0.5 }, { low: 5, high: 15 }, ["leak figures for pharmacies"]]);
 
   // the shortlist states the windows actually in force, whatever they are
   assert.equal(sendingWindows(S), "They go every day between 07:00 and 21:30, each in its own slot: working hours (09:00 to 17:30, Monday to Friday); evenings (17:30 to 21:30 on the same days); the weekend (09:00 to 17:30, Saturday, Sunday).");

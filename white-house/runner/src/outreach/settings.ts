@@ -111,6 +111,25 @@ export type BusinessType = z.infer<typeof businessType>;
 export const FIRST_TYPE_ID = "clinics";
 
 /**
+ * Leak figures per kind, set 19 Nov 2026 by the build as rough rules of thumb for each trade (NOT measured: Salekh
+ * may replace any of them). Out-of-hours share stays 0.3 to 0.5 for all. A stored kind still holding the old shared
+ * placeholder takes these once (see adoptNewDefaults); a figure anyone has changed is left alone.
+ */
+const r = (low: number, high: number) => ({ low, high });
+export const LEAK_BY_KIND: Record<string, { enquiries_a_month: { low: number; high: number }; share_lost_to_a_slow_reply: { low: number; high: number }; share_that_would_have_bought: { low: number; high: number }; share_arriving_out_of_hours: { low: number; high: number } }> = {
+  "clinics": { enquiries_a_month: r(20, 60), share_lost_to_a_slow_reply: r(0.1, 0.3), share_that_would_have_bought: r(0.1, 0.25), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "solicitors": { enquiries_a_month: r(20, 60), share_lost_to_a_slow_reply: r(0.15, 0.35), share_that_would_have_bought: r(0.2, 0.4), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "financial-advisers": { enquiries_a_month: r(10, 30), share_lost_to_a_slow_reply: r(0.1, 0.3), share_that_would_have_bought: r(0.15, 0.3), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "estate-agents": { enquiries_a_month: r(30, 100), share_lost_to_a_slow_reply: r(0.1, 0.3), share_that_would_have_bought: r(0.05, 0.15), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "accountants": { enquiries_a_month: r(10, 30), share_lost_to_a_slow_reply: r(0.15, 0.35), share_that_would_have_bought: r(0.2, 0.4), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "trades": { enquiries_a_month: r(20, 60), share_lost_to_a_slow_reply: r(0.2, 0.4), share_that_would_have_bought: r(0.1, 0.25), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "pharmacies": { enquiries_a_month: r(20, 60), share_lost_to_a_slow_reply: r(0.2, 0.4), share_that_would_have_bought: r(0.3, 0.5), share_arriving_out_of_hours: r(0.3, 0.5) },
+  "property-developers": { enquiries_a_month: r(10, 40), share_lost_to_a_slow_reply: r(0.1, 0.3), share_that_would_have_bought: r(0.01, 0.03), share_arriving_out_of_hours: r(0.3, 0.5) },
+};
+/** The figure every kind held before LEAK_BY_KIND. */
+export const OLD_SHARED_LEAK = { enquiries_a_month: r(20, 60), share_lost_to_a_slow_reply: r(0.1, 0.3), share_that_would_have_bought: r(0.1, 0.25), share_arriving_out_of_hours: r(0.3, 0.5) };
+
+/**
  * The kinds seeded by the build. Every leak assumption here is the same cautious PLACEHOLDER (see above): none
  * has been set for its trade. E-COMMERCE IS NOT HERE ON PURPOSE: a shop has no enquiry-to-booking path to test.
  */
@@ -242,6 +261,7 @@ const BUILT_IN_TYPES: Record<string, Record<string, unknown>> = {
     ask_for: "the sales manager or a director",
   },
 };
+for (const [id, leak] of Object.entries(LEAK_BY_KIND)) if (BUILT_IN_TYPES[id]) BUILT_IN_TYPES[id]!.leak_assumptions = leak;
 export const BUILT_IN_TYPE_IDS = Object.keys(BUILT_IN_TYPES);
 
 /**
@@ -481,7 +501,13 @@ export const DEFAULT_CHANGES: { since: number; key: string; was: unknown; now: u
   { since: 1, key: "enquiry_send_until", was: "17:30", now: "21:30" },
   { since: 1, key: "enquiry_send_days", was: [1, 2, 3, 4, 5], now: [1, 2, 3, 4, 5, 6, 7] },
 ];
-export const DEFAULTS_VERSION = Math.max(...DEFAULT_CHANGES.map((c) => c.since));
+/** Change 2: each kind's leak figures, from the one shared placeholder to LEAK_BY_KIND. */
+const LEAK_CHANGE = 2;
+export const DEFAULTS_VERSION = Math.max(LEAK_CHANGE, ...DEFAULT_CHANGES.map((c) => c.since));
+const sameLeak = (a: unknown, b: typeof OLD_SHARED_LEAK) => {
+  const x = a as Record<string, { low?: unknown; high?: unknown }> | null | undefined;
+  return !!x && (Object.keys(b) as (keyof typeof OLD_SHARED_LEAK)[]).every((k) => x[k]?.low === b[k].low && x[k]?.high === b[k].high);
+};
 
 /** Apply the default changes numbered above `after` to a stored value. Returns the value and which keys moved. */
 export function adoptNewDefaults(stored: Record<string, unknown>, after: number): { value: Record<string, unknown>; moved: string[] } {
@@ -492,6 +518,15 @@ export function adoptNewDefaults(stored: Record<string, unknown>, after: number)
       value[change.key] = change.now;
       moved.push(change.key);
     }
+  }
+  if (after < LEAK_CHANGE && Array.isArray(value.business_types)) {
+    value.business_types = (value.business_types as Record<string, unknown>[]).map((t) => {
+      const id = typeof t?.id === "string" ? t.id : "";
+      const next = LEAK_BY_KIND[id];
+      if (!next || !sameLeak(t.leak_assumptions, OLD_SHARED_LEAK)) return t;
+      moved.push(`leak figures for ${id}`);
+      return { ...t, leak_assumptions: next };
+    });
   }
   return { value, moved };
 }

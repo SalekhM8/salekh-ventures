@@ -67,7 +67,7 @@ try {
       console.log(`    ${t.enabled ? "ON " : "off"}  ${t.id.padEnd(20)} ${t.name}`);
       console.log(`         searched as: ${t.search_phrases.join(" | ")}. Test by email: ${t.email_test ? "yes" : "no"}. Groups left out: ${t.excluded_groups.length}.`);
       const l = t.leak_assumptions;
-      console.log(`         leak assumptions (PLACEHOLDERS until edited): ${l.enquiries_a_month.low} to ${l.enquiries_a_month.high} enquiries a month, ${l.share_lost_to_a_slow_reply.low} to ${l.share_lost_to_a_slow_reply.high} lost, ${l.share_that_would_have_bought.low} to ${l.share_that_would_have_bought.high} would have bought`);
+      console.log(`         leak figures (rough estimates, editable): ${l.enquiries_a_month.low} to ${l.enquiries_a_month.high} enquiries a month, ${l.share_lost_to_a_slow_reply.low} to ${l.share_lost_to_a_slow_reply.high} lost, ${l.share_that_would_have_bought.low} to ${l.share_that_would_have_bought.high} would have bought`);
       if (t.card_note) console.log(`         note on every card: ${t.card_note}`);
     }
     console.log("    (Online shops are not a kind here on purpose: a shop has no enquiry-to-booking path to test.)");
