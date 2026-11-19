@@ -112,6 +112,14 @@ Every business in the room that has a shortlist card or any recorded call, newes
 
 `latest` is null when no call is recorded; `history` is newest first. **Personal data on purpose** (the notes), like the approvals and enquiries lists: do not cache or log it.
 
+> **Added 19 Nov 2026.** Each entry also has `"putBackAt": "ISO time or null"` (the owner put it back after its latest `not_interested`, and that still holds) and `"canPutBack": true | false` (its latest call is `not_interested`, it is not put back, and nothing the business itself did holds it off).
+
+## POST /v1/prospects/:prospectId/put-back  (added 19 Nov 2026)
+
+The owner undoes his own `not_interested`. Body: `{ "reason": "text, optional, at most 300 characters" }`. Answers `{ "ok": true, "lifted": n }`, the number of suppressions lifted (0 when it was already put back). 404 for an unknown prospect; 422 for a bad reason; 409 `not_after_this_outcome` when its latest call is not `not_interested`; 409 `they_asked_not_to_be_contacted` when the business, or any record of the same business, opted out, complained or bounced, or any of its keys is suppressed for anything but the owner's own call. The suppressions themselves are never changed (0019): a put-back is an append-only record that lifts only those the call list added. A later `not_interested` suppresses it again, and an opt-out after a put-back wins at once. Writes one event, "The owner put a business back on the call list", with no name.
+
+Call notes and the words of finished follow-up emails are blanked once a business has had no new call or follow-up for 12 months (`WH_NOTES_KEEP_MONTHS`, 1 to 120), once a day (0020). Outcomes, dates, and that an email was sent and to which address are kept.
+
 > **Added 18 Nov 2026 (follow-up emails).** The outcome body may also carry `"followUpTo": { "name": "text, optional", "email": "address" }`, allowed only with `interested`, `call_back` or `meeting_booked`; an address that does not look like one answers 422 and nothing is recorded. After one of those three outcomes WITH a note, a follow-up email is drafted in the background (one model call, a few seconds): see the follow-up routes below. The answer is still `{ "ok": true }`. Without `followUpTo` the draft has no recipient: the system never takes an address from anywhere else.
 
 Each card in a Shortlist's Markdown carries its business's id on the line after its heading, as `<!-- prospect:<uuid> -->` (an HTML comment, not shown), and opens its profile with `- Estimated leak: £400 to £9,000 a month (estimate)` or `- Estimated leak: no figure (<why>)`. The output's `data.cards[]` has `prospect_id`, `estimated_leak` (`{ low, high, basis: "own_price" | "nearby_median" | "kind_median", workings }` or null) and `no_leak_reason`. Shortlists written before 18 Nov 2026 have neither line.

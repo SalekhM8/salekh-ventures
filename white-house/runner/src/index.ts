@@ -14,6 +14,7 @@ import { installProcessGuard } from "./guard.js";
 import { createRuntime } from "./runtime.js";
 import { createScheduler } from "./scheduler.js";
 import { createWatcher } from "./watcher.js";
+import { keepNotesMonths } from "./outreach/calls.js";
 import { breakerToday } from "./outreach/enquiries.js";
 import { apiKeyEnvName } from "./seed.js";
 import { createRunnerServer } from "./server.js";
@@ -123,6 +124,7 @@ function buildRuntime() {
     // Read at the moment of each run, so a key added later needs no restart of anything but this process's env.
     apiKeyFor: (tenantSlug) => env[apiKeyEnvName(tenantSlug)] || undefined,
     usdToGbp: rate,
+    keepNotesMonths: keepNotesMonths(env.WH_NOTES_KEEP_MONTHS),
     ...(posthog ? { traffic: { connector: posthog, hostsByBusiness: TRAFFIC_HOSTS } } : {}),
   });
   // Rooms with a daily time in their schedule are started by the runner itself, once a day.
@@ -180,6 +182,10 @@ server.listen(port, host, () => {
       // Every ten minutes: look for replies to the enquiries this system sent, and send whatever is due.
       const look = () => void runtime.collectReplies().catch((err) => console.error(`reply check failed: ${err instanceof Error ? err.name : "error"}`));
       setInterval(look, 10 * 60_000).unref();
+      // Once a day: call notes and finished follow-up emails of businesses quiet for longer than they are kept are blanked.
+      const clear = () => void runtime.clearOldNotes().then((c) => { if (c.notes + c.emails > 0) console.log(`old words cleared: ${c.notes} call notes, ${c.emails} follow-up emails`); }, (err) => console.error(`clearing old call notes failed: ${err instanceof Error ? err.name : "error"}`));
+      setInterval(clear, 24 * 60 * 60_000).unref();
+      setTimeout(clear, 5 * 60_000).unref();
       look();
     })();
   }

@@ -161,8 +161,8 @@ const dayOf = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: 
 /** "Fri 21 Nov", from a date with no time. */
 const dateOf = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 
-function filterOf(latest: CallRecord | null | undefined): Exclude<Filter, "all"> {
-  if (!latest) return "to_call";
+function filterOf(latest: CallRecord | null | undefined, putBackAt?: string | null): Exclude<Filter, "all"> {
+  if (!latest || putBackAt) return "to_call";
   switch (latest.outcome) {
     case "no_answer":
       return "to_call";
@@ -183,6 +183,8 @@ function said(c: CallRecord): string {
 export type CallsApi = {
   load: (roomId: string) => Promise<ProspectCalls[] | null>;
   save: (prospectId: string, body: OutcomeInput) => Promise<string | null>;
+  /** Undo a "not interested" pressed by mistake. Null when done, or why not. */
+  putBack: (prospectId: string) => Promise<string | null>;
 };
 
 /** Follow-up emails through the runner. Each function must keep its identity between renders (useCallback). */
@@ -202,6 +204,7 @@ export function CallList({
   roomId,
   loadCalls,
   saveOutcome,
+  putBack,
   followupApi,
 }: {
   leads: Lead[];
@@ -209,6 +212,7 @@ export function CallList({
   roomId?: string;
   loadCalls?: CallsApi["load"];
   saveOutcome?: CallsApi["save"];
+  putBack?: CallsApi["putBack"];
   followupApi?: FollowupApi;
 }) {
   const calls = roomId && loadCalls && saveOutcome ? true : false;
@@ -278,14 +282,15 @@ export function CallList({
     };
   }, [known]);
   const byId = useMemo(() => new Map((known ?? []).map((k) => [k.prospectId, k])), [known]);
-  const latestOf = (l: Lead) => {
+  const tabOf = (l: Lead) => {
     const id = idOf(l);
-    return id ? (byId.get(id)?.latest ?? null) : null;
+    const k = id ? byId.get(id) : undefined;
+    return filterOf(k?.latest ?? null, k?.putBackAt ?? null);
   };
 
   const counts = { to_call: 0, follow_ups: 0, done: 0, all: leads.length };
-  for (const l of leads) counts[filterOf(latestOf(l))] += 1;
-  const shown = filter === "all" ? leads : leads.filter((l) => filterOf(latestOf(l)) === filter);
+  for (const l of leads) counts[tabOf(l)] += 1;
+  const shown = filter === "all" ? leads : leads.filter((l) => tabOf(l) === filter);
 
   if (full)
     return (
@@ -394,6 +399,7 @@ export function CallList({
                     prospectId={id}
                     record={record}
                     save={calls ? saveOutcome : undefined}
+                    putBack={calls ? putBack : undefined}
                     onSaved={async () => {
                       await load();
                       await reloadFollowups();
@@ -482,6 +488,7 @@ function Outcome({
   prospectId,
   record,
   save,
+  putBack,
   onSaved,
   why,
   followups,
@@ -489,6 +496,7 @@ function Outcome({
   prospectId: string | null;
   record: ProspectCalls | undefined;
   save?: CallsApi["save"];
+  putBack?: CallsApi["putBack"];
   onSaved: () => Promise<void>;
   why: string;
   /** Whether follow-up emails can be asked for here. */
@@ -505,6 +513,19 @@ function Outcome({
   const enabled = Boolean(prospectId && save);
   const latest = record?.latest ?? null;
   const earlier = record?.history.slice(1) ?? [];
+
+  const undo = async () => {
+    if (!prospectId || !putBack) return;
+    setBusy(true);
+    setError("");
+    const failed = await putBack(prospectId);
+    setBusy(false);
+    if (failed) {
+      setError(failed === "they_asked_not_to_be_contacted" ? "They asked not to be contacted, so they can't be put back." : `Not put back: ${failed}`);
+      return;
+    }
+    await onSaved();
+  };
 
   const submit = async () => {
     if (!prospectId || !save || !picked) return;
@@ -541,6 +562,15 @@ function Outcome({
         <div className="mb-2" style={{ font: `400 14px/1.45 ${SANS}`, color: C.ink }}>
           <strong style={{ fontWeight: 600 }}>{said(latest)}</strong>
           {latest.note && <p style={{ marginTop: 2, whiteSpace: "pre-wrap" }}>{latest.note}</p>}
+          {record?.putBackAt && <p style={{ marginTop: 2, fontWeight: 600, color: "#1c7046" }}>You put them back on the list on {dayOf(record.putBackAt)}.</p>}
+          {record?.canPutBack && putBack && (
+            <div className="mt-2 grid gap-1">
+              <button type="button" onClick={() => void undo()} disabled={busy} style={{ ...pill, justifySelf: "start" }}>
+                {busy ? "Putting back…" : "Put back on the list"}
+              </button>
+              <span style={{ font: `400 13px/1.45 ${SANS}`, color: "#7a6a62" }}>Pressed Not interested by mistake? This lets you contact them again.</span>
+            </div>
+          )}
           {earlier.length > 0 && (
             <>
               <button type="button" onClick={() => setHistory(!history)} aria-expanded={history} style={{ ...link, marginTop: 4 }}>
@@ -632,12 +662,12 @@ function Outcome({
               </p>
             </fieldset>
           )}
-          <button type="button" onClick={() => { if (picked === "not_interested" && !window.confirm("Never contact them again? This can't be undone.")) return; void submit(); }} disabled={busy} style={{ ...pill, background: picked === "not_interested" ? "#B3261E" : C.ink, color: C.surface, justifySelf: "start" }}>
+          <button type="button" onClick={() => { if (picked === "not_interested" && !window.confirm("Never contact them again? If you press this by mistake you can put them back from Done.")) return; void submit(); }} disabled={busy} style={{ ...pill, background: picked === "not_interested" ? "#B3261E" : C.ink, color: C.surface, justifySelf: "start" }}>
             {busy ? "Saving…" : `Save: ${LABEL[picked]}`}
           </button>
           {picked === "not_interested" && (
             <p style={{ font: `600 13.5px/1.45 ${SANS}`, color: "#B3261E" }}>
-              This means never contact them again, and it can&apos;t be undone. If they asked you to email them, pick Call back or Interested instead and add the address.
+              This means never contact them again. If they asked you to email them, pick Call back or Interested instead and add the address.
             </p>
           )}
         </div>

@@ -30,7 +30,7 @@ type ApiHouse = {
 
 export type CallOutcome = "no_answer" | "call_back" | "interested" | "meeting_booked" | "not_interested" | "wrong_person";
 export type CallRecord = { outcome: CallOutcome; note: string | null; followUpOn: string | null; at: string };
-export type ProspectCalls = { prospectId: string; name: string; latest: CallRecord | null; history: CallRecord[] };
+export type ProspectCalls = { prospectId: string; name: string; latest: CallRecord | null; history: CallRecord[]; putBackAt?: string | null; canPutBack?: boolean };
 export type OutcomeInput = { outcome: CallOutcome; note?: string; followUpOn?: string; followUpTo?: { name?: string; email: string } };
 
 /** A follow-up email after a call. Personal data (who it is to, what it says): kept in memory only. */
@@ -230,6 +230,12 @@ export function useLiveHouse(enabled = true) {
     return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
   }, []);
 
+  /** Undo his own "not interested": the business goes back on the list. Returns null when done, or why it was not. */
+  const putBack = useCallback(async (prospectId: string): Promise<string | null> => {
+    const r = await call(`v1/prospects/${encodeURIComponent(prospectId)}/put-back`, {});
+    return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
+  }, []);
+
   /** The follow-up emails of one room, with the rung and whether a mailbox is connected to send them. */
   const followups = useCallback(async (roomId: string): Promise<FollowupList | null> => {
     const r = await call(`v1/rooms/${toApi(roomId)}/followups`);
@@ -249,7 +255,7 @@ export function useLiveHouse(enabled = true) {
   const setFollowupRung = useCallback(async (roomId: string, rung: 2 | 3) => answer(await call(`v1/rooms/${toApi(roomId)}/followup-rung`, { rung })), []);
 
   return {
-    connected, stopped: house?.killSwitch.global ?? false, health: house?.health ?? [], sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome,
+    connected, stopped: house?.killSwitch.global ?? false, health: house?.health ?? [], sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome, putBack,
     followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung,
   };
 }

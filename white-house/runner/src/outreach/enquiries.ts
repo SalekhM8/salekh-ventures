@@ -53,7 +53,7 @@ export function notTestableReason(p: ProspectRow, scorable: Scorable, settings: 
 async function suppressedFor(tx: Tx, businessId: string, keys: { domain: string | null; email: string | null; company: string | null }): Promise<boolean> {
   const found = await tx.query(
     `select 1 from suppressions
-      where (business_id is null or business_id = $1)
+      where (business_id is null or business_id = $1) and not wh_suppression_lifted(suppression_id)
         and ((kind = 'domain' and value_key = $2) or (kind = 'email' and value_key = $3) or (kind = 'company_number' and value_key = $4))
       limit 1`,
     [businessId, keys.domain, keys.email, keys.company],

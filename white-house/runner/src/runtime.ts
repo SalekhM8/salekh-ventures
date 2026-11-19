@@ -25,7 +25,7 @@ import { renderResultsSoFar, replyPrompt } from "./outreach/pipeline.js";
 import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
 import { emitEvent, type EventInput } from "./control/events.js";
-import { checkOutcome, listCalls, recordOutcome, type CallsOfProspect } from "./outreach/calls.js";
+import { checkOutcome, clearOldNotes, DEFAULT_KEEP_NOTES_MONTHS, listCalls, MAX_PUT_BACK_REASON, putBack, recordOutcome, type CallsOfProspect } from "./outreach/calls.js";
 import { checkRecipient, createFollowupConnector, createFollowups, DRAFT_OUTCOMES, FOLLOWUP_ACTION, type FollowupView } from "./outreach/followups.js";
 import { createGateway, type Gateway } from "./control/gateway.js";
 import { finishRun, startRun, tenantDay } from "./control/runs.js";
@@ -55,6 +55,8 @@ export interface RuntimeOptions {
   now?: () => Date;
   /** Dollars to pounds for the budget. A single placeholder rate until Salekh settles the rule. */
   usdToGbp: number;
+  /** How many months call notes and follow-up emails are kept after a business goes quiet (WH_NOTES_KEEP_MONTHS). Default 12. */
+  keepNotesMonths?: number;
   actionTypes?: ActionTypeRegistry;
   connectors?: Record<string, Connector>;
   /** Traffic totals for the Data room, where a floor has a source. */
@@ -135,6 +137,8 @@ export interface Runtime {
   checkMail(): Promise<MailCheck | null>;
   /** Put back in the queue the enquiries marked failed since a day that never reached the mail server. Returns how many. */
   requeueUnsent(since: Date): Promise<number>;
+  /** The daily clear of words kept past their time: call notes and finished follow-up emails (0020). */
+  clearOldNotes(): Promise<{ notes: number; emails: number }>;
   /**
    * At start: close every run left "running" by a process that is no longer there, as failed with the reason
    * interrupted_by_restart. `restart` names the pipeline rooms whose run was cut off and has not already been
@@ -151,6 +155,8 @@ export interface Runtime {
   listReplies(roomId: string, since: string | null): Promise<Answer<{ replies: ReplyRecord[] }>>;
   /** Record what happened on a call to one business. Append only. "not_interested" also suppresses it for good. */
   recordCallOutcome(prospectId: string, body: unknown): Promise<Answer<{ ok: true }>>;
+  /** The owner undoes his own "not interested" (0019). Refused when the business itself asked not to be contacted. */
+  putBack(prospectId: string, body: unknown): Promise<Answer<{ lifted: number }>>;
   /** Every business in one room with a card or a recorded call, and its calls. Personal data (the notes), on purpose. */
   listCalls(roomId: string): Promise<Answer<{ calls: CallsOfProspect[] }>>;
   /** The follow-up emails of one room, the rung they are at and whether the owner's mailbox is connected. Personal data, on purpose. */
@@ -891,6 +897,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return { status: 200, ok: true };
   };
 
+  const putBackOf: Runtime["putBack"] = async (prospectId, body) => {
+    const given = (body as { reason?: unknown } | null)?.reason;
+    if (given !== undefined && given !== null && (typeof given !== "string" || given.length > MAX_PUT_BACK_REASON)) {
+      return { status: 422, reason: `reason must be text of at most ${MAX_PUT_BACK_REASON} characters` };
+    }
+    const reason = typeof given === "string" && given.trim() ? given.trim() : "the owner put it back from the call list";
+    const done = await putBack(gatewayDb, tenantId, prospectId, reason, clock());
+    if (!done.ok) return done.status === 404 ? { status: 404 } : { status: 409, reason: done.reason };
+    changed();
+    return { status: 200, lifted: done.lifted };
+  };
+
   const listFollowupsOf: Runtime["listFollowups"] = async (roomId) => {
     const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
     if (!room) return { status: 404 };
@@ -1191,5 +1209,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, putBack: putBackOf, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()), clearOldNotes: () => clearOldNotes(gatewayDb, tenantId, options.keepNotesMonths ?? DEFAULT_KEEP_NOTES_MONTHS, clock()) };
 }

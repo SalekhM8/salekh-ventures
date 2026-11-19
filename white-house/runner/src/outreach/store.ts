@@ -3,7 +3,7 @@ import type { CompaniesHouseConnector, CompanyResult } from "../control/connecto
 import { lock, type Db, type Tx } from "../control/db.js";
 import { ControlError } from "../control/errors.js";
 import { tenantDay } from "../control/runs.js";
-import { companyNumberKey, domainKey, hostKey, nameKey, namePostcodeHash, namesNearlyMatch, postcodeKey } from "./normalise.js";
+import { companyNumberKey, domainKey, hostKey, nameKey, namePostcodeHash, namesNearlyMatch, NO_HOURS, postcodeKey, shortHours } from "./normalise.js";
 import type { Place } from "../control/connectors/places.js";
 import { benchmarkFrom, captureFor, priceServiceOf, sayMinutes, serviceFor, SLOT_NAME, type PriceBenchmark, type Slot, type TestResult } from "./enquiry-rules.js";
 import { applyFilters, isGroup, scoreProspect, type Analysis, type Draft, type Scorable } from "./score.js";
@@ -45,7 +45,7 @@ export type RecordResult = { recorded: true; prospectId: string } | { recorded: 
 async function isSuppressed(tx: Tx, businessId: string, keys: { domain: string | null; company: string | null; hash: string | null }): Promise<boolean> {
   const found = await tx.query(
     `select 1 from suppressions
-      where (business_id is null or business_id = $1)
+      where (business_id is null or business_id = $1) and not wh_suppression_lifted(suppression_id)
         and ((kind = 'domain' and value_key = $2) or (kind = 'company_number' and value_key = $3) or (kind = 'name_postcode' and value_key = $4))
       limit 1`,
     [businessId, keys.domain, keys.company, keys.hash],
@@ -820,7 +820,7 @@ export function compare(self: PublicFacts, competitors: PublicFacts[]): Comparis
     row("Reviews", (f) => (typeof f.reviews === "object" ? `${f.reviews.rating} from ${f.reviews.count}${ref(f.reviews.source_url)}` : "not found")),
     row("Ways to enquire", (f) => (f.routes.length ? f.routes.map((r) => `${r.kind}${ref(r.source_url)}`).join(", ") : "not found")),
     row("Front desk job advert", (f) => (typeof f.front_desk_advert === "object" ? `advert found${ref(f.front_desk_advert.source_url)}` : "not found")),
-    row("Opening hours", (f) => (typeof f.opening_hours === "object" ? `${f.opening_hours.value}${ref(f.opening_hours.source_url)}` : "not found")),
+    row("Opening hours", (f) => (typeof f.opening_hours === "object" && shortHours(f.opening_hours.value) !== NO_HOURS ? `${shortHours(f.opening_hours.value)}${ref(f.opening_hours.source_url)}` : NO_HOURS)),
     // A reply to an enquiry sent at noon says nothing about one sent on a Saturday. Only the same slot is set side by side.
     row("Reply to the test enquiry", (f) =>
       !f.tested || f.tested === "no" ? "Not tested yet" : f.tested === "awaiting" ? "Sent, awaiting the wait" : !sameSlot(f) ? `tested ${SLOT_NAME[f.slot as Slot]}: not compared`
@@ -885,7 +885,7 @@ export async function knownDomains(db: Db, scope: ProspectScope, domains: string
   return db.tx(scope.tenantId, async (tx) => {
     const known = await tx.query("select domain_key from prospects where business_id = $1 and domain_key = any ($2)", [scope.businessId, domains]);
     const suppressed = await tx.query(
-      "select value_key from suppressions where (business_id is null or business_id = $1) and kind = 'domain' and value_key = any ($2)",
+      "select value_key from suppressions where (business_id is null or business_id = $1) and kind = 'domain' and value_key = any ($2) and not wh_suppression_lifted(suppression_id)",
       [scope.businessId, domains],
     );
     return { known: new Set(known.rows.map((r) => r.domain_key as string)), suppressed: new Set(suppressed.rows.map((r) => r.value_key as string)) };

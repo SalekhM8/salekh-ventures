@@ -124,3 +124,52 @@ export function isBlockedAddress(address: unknown): boolean {
   }
   return LINKEDIN_PROFILE.test(text);
 }
+
+// ---- opening hours, short --------------------------------------------------
+
+const DAYS = [["monday", "Mon"], ["tuesday", "Tue"], ["wednesday", "Wed"], ["thursday", "Thu"], ["friday", "Fri"], ["saturday", "Sat"], ["sunday", "Sun"]] as const;
+export const NO_HOURS = "Hours not listed";
+const SHORT_LIMIT = 48;
+
+/** "9:00 AM – 5:30 PM" → "9–5:30"; "09:00–17:00" → "9–17"; "Closed" → "closed". */
+function shortTimes(text: string): string {
+  const t = text.trim();
+  if (/^closed$/i.test(t)) return "closed";
+  if (/open 24 hours/i.test(t)) return "24 hours";
+  return t
+    .replace(/\s*[–—-]\s*/g, "–")
+    .replace(/\s*(am|pm)\b/gi, "")
+    .replace(/:00\b/g, "")
+    .replace(/(^|[–\s,])0(\d)/g, "$1$2")
+    .replace(/\s*,\s*/g, " & ");
+}
+
+/**
+ * Opening hours in a few words for a table cell: consecutive days with the same hours are joined, as
+ * "Mon–Fri 9–5, Sat 10–2, Sun closed". Google's "Monday: 9:00 AM – 5:00 PM; Tuesday: …" is read day by day;
+ * anything else is kept if short and cut at a word if not. Nothing, or "not found": "Hours not listed".
+ */
+export function shortHours(value: unknown): string {
+  if (typeof value !== "string") return NO_HOURS;
+  const text = value.replace(/[   ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text || /^not found$/i.test(text)) return NO_HOURS;
+  const parts = text.split(/\s*;\s*/).filter(Boolean);
+  const days = parts.map((p) => {
+    const m = /^([A-Za-z]+)\s*:\s*(.+)$/.exec(p);
+    const day = m ? DAYS.findIndex(([long]) => long === (m[1] as string).toLowerCase()) : -1;
+    return day >= 0 && m ? { day, hours: shortTimes(m[2] as string) } : null;
+  });
+  if (days.length > 0 && days.every((d) => d !== null)) {
+    const groups: { from: number; to: number; hours: string }[] = [];
+    for (const d of days as { day: number; hours: string }[]) {
+      const last = groups[groups.length - 1];
+      if (last && last.hours === d.hours && d.day === last.to + 1) last.to = d.day;
+      else groups.push({ from: d.day, to: d.day, hours: d.hours });
+    }
+    const name = (i: number) => DAYS[i]?.[1] ?? "";
+    return groups.map((g) => `${g.from === g.to ? name(g.from) : `${name(g.from)}–${name(g.to)}`} ${g.hours}`).join(", ");
+  }
+  if (text.length <= SHORT_LIMIT) return text;
+  const cut = text.slice(0, SHORT_LIMIT);
+  return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : SHORT_LIMIT).replace(/[,;:\s]+$/, "")}…`;
+}

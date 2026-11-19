@@ -1048,6 +1048,7 @@ export default function House3D({
                       roomId={isLive ? room.id : undefined}
                       loadCalls={live.calls}
                       saveOutcome={live.recordOutcome}
+                      putBack={live.putBack}
                       followupApi={{ load: live.followups, edit: live.editFollowup, decide: live.decideFollowup, request: live.requestFollowup, setRung: live.setFollowupRung }}
                     /> : <Markdown text={viewing.body} />;
                 })()}

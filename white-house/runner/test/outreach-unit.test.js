@@ -2,7 +2,7 @@
 // Companies House connector with a stubbed HTTP layer. No database, no network.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { domainKey, nameKey, namePostcodeHash, namesNearlyMatch, postcodeKey } from "../dist/outreach/normalise.js";
+import { domainKey, nameKey, namePostcodeHash, namesNearlyMatch, postcodeKey, shortHours } from "../dist/outreach/normalise.js";
 import { DEFAULT_OUTREACH_SETTINGS, parseOutreachSettings } from "../dist/outreach/settings.js";
 import { applyFilters, bestRoute, isGroup, leadAgentFor, lintDraft, namedGroup, scoreProspect } from "../dist/outreach/score.js";
 import { advertAge } from "../dist/outreach/stages.js";
@@ -160,7 +160,7 @@ test("the comparison is one table with sources listed once, then only the differ
     "| Reviews | 3.9 from 41 [1] | 4.8 from 120 [2] | 3.1 from 10 [3] |",
     "| Ways to enquire | phone [1] | phone [2], whatsapp [4] | not found |",
     "| Front desk job advert | advert found [5] | not found | not found |",
-    "| Opening hours | not found | Mon to Sat 9 to 6 [2] | not found |",
+    "| Opening hours | Hours not listed | Mon to Sat 9 to 6 [2] | Hours not listed |",
     "| Reply to the test enquiry | Not tested yet | Not tested yet | Not tested yet |",
     "| Capture score | Not tested yet | Not tested yet | Not tested yet |",
     "",
@@ -428,4 +428,17 @@ test("an upstream failure that pauses the channel is its own state, with the wai
   await assert.rejects(reachStub(broken([{ backend: "opencli", result: "UPSTREAM_BROKEN", retry_after_seconds: 118.4 }])).reach.jobs("receptionist", "Fixtureton", 5), is("reach_paused", 119));
   await assert.rejects(reachStub(broken([{ backend: "opencli", result: "UPSTREAM_BROKEN" }])).reach.jobs("receptionist", "Fixtureton", 5), is("reach_failed", null));
   await assert.rejects(reachStub(broken(undefined)).reach.jobs("receptionist", "Fixtureton", 5), is("reach_failed", null));
+});
+
+test("opening hours are short in the rivals table: days with the same hours joined, never the long raw text", () => {
+  const g = (d, h) => `${d}: ${h}`;
+  const nine = "9:00 AM – 5:00 PM";
+  const google = [g("Monday", nine), g("Tuesday", nine), g("Wednesday", nine), g("Thursday", "9:00 AM – 7:30 PM"), g("Friday", nine), g("Saturday", "10:00 AM – 2:00 PM"), g("Sunday", "Closed")].join("; ");
+  assert.equal(shortHours(google), "Mon–Wed 9–5, Thu 9–7:30, Fri 9–5, Sat 10–2, Sun closed");
+  assert.equal(shortHours("Monday: Open 24 hours; Tuesday: 8:30 AM – 1:00 PM, 2:00 – 6:00 PM"), "Mon 24 hours, Tue 8:30–1 & 2–6");
+  assert.equal(shortHours("Monday: 09:00–17:00; Tuesday: 09:00–17:00"), "Mon–Tue 9–17");
+  assert.equal(shortHours("Mon to Fri 9 to 5"), "Mon to Fri 9 to 5", "short text from a page is kept");
+  const long = shortHours("We are open Monday to Friday from nine in the morning until half past five in the evening, and Saturdays by appointment");
+  assert.ok(long.length <= 49 && long.endsWith("…"), long);
+  for (const none of ["not found", "", null, undefined, 5]) assert.equal(shortHours(none), "Hours not listed");
 });

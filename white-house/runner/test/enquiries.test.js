@@ -2792,7 +2792,7 @@ test("call outcomes: recorded behind the token, checked, kept as history, listed
   assert.deepEqual(a.history.map((c) => [c.outcome, c.note, c.followUpOn]), [["interested", null, null], ["call_back", NOTE, "2026-11-21"], ["no_answer", null, null]], "newest first, nothing overwritten");
   assert.deepEqual(a.latest, a.history[0]);
   assert.equal(a.name, "Fixture Alpha Dental");
-  assert.deepEqual(listed.find((c) => c.prospectId === beta.id), { prospectId: beta.id, name: "Fixture Beta Dental", latest: null, history: [] }, "a business with a card and no call yet is listed too");
+  assert.deepEqual(listed.find((c) => c.prospectId === beta.id), { prospectId: beta.id, name: "Fixture Beta Dental", latest: null, history: [], putBackAt: null, canPutBack: false }, "a business with a card and no call yet is listed too");
   assert.equal(listed.length, 2, "a business with neither a card nor a call is not");
   // nobody can rewrite or remove the history
   await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("update call_outcomes set outcome = 'no_answer'")), (err) => err.code === "42501");
@@ -2817,4 +2817,129 @@ test("call outcomes: recorded behind the token, checked, kept as history, listed
   // recording it twice changes nothing more
   assert.equal((await post(beta.id, { outcome: "not_interested" })).status, 200);
   assert.equal((await rows(h, "select 1 from suppressions where tenant_id = $1", [x.w.tenantId])).length, 3);
+});
+
+test("put back: the owner undoes his own not interested; never when the business asked to be left alone; a later not interested holds again", async () => {
+  const t = await house({ server: true });
+  const { x } = t;
+  const gamma = await clinic(t, "gamma");
+  const delta = await clinic(t, "delta");
+  const omega = await clinic(t, "omega");
+  for (const c of [gamma, delta, omega]) await h.admin.query("update prospects set card = '{}'::jsonb where prospect_id = $1", [c.id]);
+  const post = (id, body) => x.call("POST", `/v1/prospects/${id}/outcome`, body);
+  const back = (id, body = {}, token) => x.call("POST", `/v1/prospects/${id}/put-back`, body, token);
+  const listed = async (id) => (await x.call("GET", `/v1/rooms/${ROOM}/calls`)).body.calls.find((c) => c.prospectId === id);
+  const blocked = async (c) => {
+    const [row] = await prospectsByIds(h.gatewayDb, t.scope, [c.id]);
+    return (await proposeEnquiry(h.gatewayDb, x.runtime.gateway, t.scope, row, GOOD, x.w.clock.now())).why === "suppressed";
+  };
+  const found = async (c) => (await recordProspect(h.gatewayDb, t.scope, { name: c.name, website: c.site, signal: "none", source_url: c.site }, { now: x.w.clock.now() })).why;
+
+  // the token, and only after a "not interested"
+  assert.equal((await back(gamma.id, {}, null)).status, 401);
+  assert.equal((await back("not-a-uuid")).status, 404);
+  assert.equal((await back(gamma.id)).status, 409, "nothing to put back before any call");
+  assert.equal((await back(gamma.id, { reason: 5 })).status, 422);
+  assert.equal((await post(gamma.id, { outcome: "no_answer" })).status, 200);
+  assert.deepEqual((await back(gamma.id)).body, { reason: "not_after_this_outcome" });
+
+  // not interested, then put back: contactable again, and shown as put back
+  x.w.clock.advance(HOUR);
+  assert.equal((await post(gamma.id, { outcome: "not_interested" })).status, 200);
+  assert.equal(await blocked(gamma), true);
+  assert.equal(await found(gamma), "suppressed");
+  assert.equal((await listed(gamma.id)).canPutBack, true);
+  x.w.clock.advance(HOUR);
+  const res = await back(gamma.id, { reason: "they asked for an email, pressed by mistake" });
+  assert.deepEqual([res.status, res.body.ok, res.body.lifted > 0], [200, true, true]);
+  assert.equal(await blocked(gamma), false, "an enquiry is no longer refused as suppressed");
+  assert.equal(await found(gamma), "already_known", "no longer suppressed when found again");
+  const g = await listed(gamma.id);
+  assert.deepEqual([g.canPutBack, typeof g.putBackAt], [false, "string"]);
+  assert.equal((await back(gamma.id)).body.lifted, 0, "twice changes nothing more");
+  const total = (await rows(h, "select 1 from suppressions where tenant_id = $1", [x.w.tenantId])).length;
+  assert.ok(total >= 3, "the suppressions themselves are kept");
+  // nobody can rewrite or remove a put-back
+  await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("delete from owner_put_backs")), (err) => err.code === "42501");
+  await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("update owner_put_backs set reason = reason")), (err) => err.code === "42501");
+  // the house log shows a fixed line, no name
+  const ev = (await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId, withPayload: true })).filter((e) => e.reasonCode === "put_back_by_owner");
+  assert.ok(ev.length === 1 && ev[0].summary === "The owner put a business back on the call list" && !JSON.stringify(ev).includes("Gamma"));
+
+  // a later not interested suppresses it again, and it can be put back again
+  x.w.clock.advance(HOUR);
+  assert.equal((await post(gamma.id, { outcome: "not_interested" })).status, 200);
+  assert.equal(await blocked(gamma), true, "suppressed again");
+  assert.deepEqual([(await listed(gamma.id)).canPutBack, (await listed(gamma.id)).putBackAt], [true, null]);
+  x.w.clock.advance(HOUR);
+  assert.equal((await back(gamma.id)).status, 200);
+  assert.equal(await blocked(gamma), false);
+
+  // the business asked not to be contacted (its own opt-out on its address): never put back
+  assert.equal((await post(delta.id, { outcome: "not_interested" })).status, 200);
+  await h.admin.query("insert into suppressions (tenant_id, business_id, kind, value_key, reason, source) values ($1, null, 'email', 'other-desk@fixture-delta.example.test', 'asked not to be contacted, in a reply to a test enquiry', 'opt_out')", [x.w.tenantId]);
+  await h.admin.query("update prospects set contact_routes = contact_routes || '[{\"kind\": \"email\", \"value\": \"other-desk@fixture-delta.example.test\"}]'::jsonb where prospect_id = $1", [delta.id]);
+  assert.deepEqual((await back(delta.id)).body, { reason: "they_asked_not_to_be_contacted" });
+  assert.equal((await listed(delta.id)).canPutBack, false, "and the list does not offer it");
+  assert.equal(await blocked(delta), true);
+
+  // a complaint in a reply: refused, and the list does not offer it
+  assert.equal((await post(omega.id, { outcome: "not_interested" })).status, 200);
+  await h.admin.query(`update prospects set test_result = '{"opted_out": true, "replies": [{"kind": "person", "complaint_sentence": "Stop emailing us."}]}'::jsonb where prospect_id = $1`, [omega.id]);
+  assert.equal((await listed(omega.id)).canPutBack, false);
+  assert.deepEqual((await back(omega.id)).body, { reason: "they_asked_not_to_be_contacted" });
+  assert.equal(await blocked(omega), true);
+
+  // an opt-out that comes AFTER a put-back wins at once, even though it adds no suppression row of its own
+  await h.admin.query(`update prospects set test_result = '{"opted_out": true, "replies": []}'::jsonb where prospect_id = $1`, [gamma.id]);
+  assert.equal(await blocked(gamma), true, "an opt-out after the put-back blocks it again");
+  assert.equal((await listed(gamma.id)).putBackAt, null);
+});
+
+test("call notes and finished follow-up emails are blanked once a business has been quiet for 12 months; outcomes, dates and that an email went are kept", async () => {
+  const { keepNotesMonths } = await import("../dist/outreach/calls.js");
+  assert.deepEqual(["", undefined, "0", "6", "12.5", "121", "x"].map(keepNotesMonths), [12, 12, 12, 6, 12, 12, 12]);
+  const t = await house({ server: true });
+  const { x } = t;
+  const quiet = await clinic(t, "quiet");
+  const busy = await clinic(t, "busy");
+  const post = (id, body) => x.call("POST", `/v1/prospects/${id}/outcome`, body);
+  const NOTE = "Spoke to FIXTURE-PERSON on reception";
+  const sentEmail = (id, at) => h.admin.query(
+    `insert into followups (tenant_id, business_id, prospect_id, outcome, to_name, to_address, subject, body, status, message_id, sent_at, created_at, updated_at)
+     values ($1, $2, $3, 'interested', 'Fixture Person', 'person@fixture.example.test', 'Fixture subject', 'Fixture body FIXTURE-PERSON', 'sent', '<m@fixture>', $4, $4, $4)`,
+    [x.w.tenantId, x.w.businessId, id, at]);
+  assert.equal((await post(quiet.id, { outcome: "interested", note: NOTE })).status, 200);
+  assert.equal((await post(busy.id, { outcome: "call_back", note: NOTE })).status, 200);
+  await sentEmail(quiet.id, x.w.clock.now());
+  await sentEmail(busy.id, x.w.clock.now());
+  // an open draft is never touched, whatever its age
+  await h.admin.query(
+    `insert into followups (tenant_id, business_id, prospect_id, subject, body, status, created_at, updated_at) values ($1, $2, $3, 'Open subject', 'Open body', 'draft', $4, $4)`,
+    [x.w.tenantId, x.w.businessId, quiet.id, x.w.clock.now()]);
+
+  // eleven months on, nothing is old enough
+  x.w.clock.advance(335 * 24 * HOUR);
+  assert.deepEqual(await x.runtime.clearOldNotes(), { notes: 0, emails: 0 });
+  // one business is called again: its clock starts again
+  assert.equal((await post(busy.id, { outcome: "no_answer" })).status, 200);
+  x.w.clock.advance(40 * 24 * HOUR);
+  assert.deepEqual(await x.runtime.clearOldNotes(), { notes: 1, emails: 1 }, "only the quiet one, a year and more after its last word");
+  assert.deepEqual(await x.runtime.clearOldNotes(), { notes: 0, emails: 0 }, "twice changes nothing more");
+
+  const calls = await rows(h, "select prospect_id, outcome, note, created_at from call_outcomes where tenant_id = $1 order by created_at", [x.w.tenantId]);
+  assert.deepEqual(calls.filter((c) => c.prospect_id === quiet.id).map((c) => [c.outcome, c.note]), [["interested", null]], "the outcome and its date stay, the note goes");
+  assert.equal(calls.find((c) => c.prospect_id === busy.id && c.outcome === "call_back").note, NOTE, "the busy one keeps its note");
+  const mail = await rows(h, "select prospect_id, status, subject, body, to_name, to_address, sent_at, cleared_at from followups where tenant_id = $1", [x.w.tenantId]);
+  const q = mail.find((m) => m.prospect_id === quiet.id && m.status === "sent");
+  assert.deepEqual([q.to_name, q.body.includes("FIXTURE-PERSON"), q.subject.includes("Fixture"), q.to_address, q.sent_at instanceof Date, q.cleared_at instanceof Date], [null, false, false, "person@fixture.example.test", true, true]);
+  assert.equal(mail.find((m) => m.status === "draft").body, "Open body");
+  assert.equal(mail.find((m) => m.prospect_id === busy.id).body, "Fixture body FIXTURE-PERSON");
+  // the log says how many, never whose
+  const ev = (await control.listEvents(h.gatewayDb, { tenantId: x.w.tenantId, withPayload: true })).filter((e) => e.reasonCode === "old_call_notes_cleared");
+  assert.equal(ev.length, 1);
+  assert.ok(!JSON.stringify(ev).includes("FIXTURE-PERSON") && !JSON.stringify(ev).includes("Quiet"));
+  // call outcomes still cannot be rewritten: only a note cleared
+  await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("update call_outcomes set note = 'changed'")), /only a note can be cleared/);
+  await assert.rejects(h.gatewayDb.tx(x.w.tenantId, (tx) => tx.query("update call_outcomes set outcome = 'no_answer'")), (err) => err.code === "42501");
 });

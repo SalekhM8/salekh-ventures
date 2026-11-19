@@ -339,13 +339,16 @@ async function blockedReason(tx: Tx, prospectId: string, to: string | null, now:
   if (!p || p.purged_at) return "not_found";
   const suppressed = await tx.query(
     `select 1 from suppressions
-      where (business_id is null or business_id = $1)
+      where (business_id is null or business_id = $1) and not wh_suppression_lifted(suppression_id)
         and ((kind = 'domain' and value_key = $2) or (kind = 'company_number' and value_key = $3)
              or (kind = 'name_postcode' and value_key = $4) or (kind = 'email' and value_key = $5))
       limit 1`,
     [p.business_id, p.domain_key, companyNumberKey(p.companies_house_number), p.name_postcode_hash, to ? to.toLowerCase() : null]);
-  const latest = (await tx.query("select outcome from call_outcomes where prospect_id = $1 order by created_at desc, call_outcome_id desc limit 1", [prospectId])).rows[0];
-  if (latest?.outcome === "not_interested") return "not_interested";
+  const latest = (await tx.query(
+    `select c.outcome, exists (select 1 from owner_put_backs b where b.prospect_id = c.prospect_id and b.created_at > c.created_at) and not wh_business_asked_off(c.prospect_id) as put_back
+       from call_outcomes c where c.prospect_id = $1 order by c.created_at desc, c.call_outcome_id desc limit 1`, [prospectId])).rows[0];
+  // "Not interested" holds until the owner puts the business back from the call list (and it never asked to be left alone).
+  if (latest?.outcome === "not_interested" && latest.put_back !== true) return "not_interested";
   if (suppressed.rows.length > 0) return "suppressed";
   const recent = await tx.query("select 1 from followups where prospect_id = $1 and sent_at > $2 and followup_id is distinct from $3 limit 1", [prospectId, new Date(now.getTime() - DAY_MS), except]);
   if (recent.rows.length > 0) return "sent_in_the_last_24_hours";

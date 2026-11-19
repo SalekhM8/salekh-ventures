@@ -97,6 +97,10 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.recordCallOutcome(b as string, body);
         return r.status === 200 ? send(res, 200, { ok: true }) : fail(r);
       }
+      case "POST prospects/:id/put-back": {
+        const r = await rt.putBack(b as string, body);
+        return r.status === 200 ? send(res, 200, { ok: true, lifted: r.lifted }) : fail(r);
+      }
       case "GET rooms/:id/followups": {
         const r = await rt.listFollowups(b as string);
         return r.status === 200 ? send(res, 200, { followups: r.followups, rung: r.rung, ownerMailbox: r.ownerMailbox, drafting: r.drafting }) : fail(r);
