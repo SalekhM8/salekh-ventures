@@ -980,7 +980,20 @@ export async function purgeProspects(db: Db, input: { tenantId: string }, now = 
               signals = '[]'::jsonb, analysis = null, contact_name = null, contact_role = null, contact_name_source = null,
               contact_routes = '[]'::jsonb, companies_house = null, score_breakdown = null, card = null,
               test_result = null, purged_at = $1
-        where stage = 'filtered_out' and purged_at is null and purge_after is not null and purge_after <= $1`,
+        where stage = 'filtered_out' and purged_at is null and purge_after is not null and purge_after <= $1
+          -- Never a business he has dealt with, or one held off: its details are what that history and the hold are read against.
+          and not exists (select 1 from call_outcomes c where c.prospect_id = prospects.prospect_id)
+          and not exists (select 1 from followups f where f.prospect_id = prospects.prospect_id)
+          and not exists (select 1 from plans l where l.prospect_id = prospects.prospect_id)
+          and not exists (select 1 from owner_put_backs b where b.prospect_id = prospects.prospect_id)
+          and not exists (select 1 from suppressions s
+                           where (s.business_id is null or s.business_id = prospects.business_id)
+                             and ((s.kind = 'domain' and s.value_key = prospects.domain_key)
+                               or (s.kind = 'name_postcode' and s.value_key = prospects.name_postcode_hash)
+                               or (s.kind = 'company_number' and prospects.companies_house_number is not null
+                                   and s.value_key = (select case when k ~ '^\\d{6,8}$' then lpad(k, 8, '0') else k end
+                                                        from upper(regexp_replace(prospects.companies_house_number, '\\s', '', 'g')) k))
+                               or (s.kind = 'email' and s.value_key in (select e.to_address_key from enquiries e where e.prospect_id = prospects.prospect_id))))`,
       [now],
     );
     return purged.rowCount ?? 0;

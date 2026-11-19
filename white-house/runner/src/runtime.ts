@@ -16,7 +16,7 @@ import type { TrafficConnector } from "./control/connectors/posthog.js";
 import type { ModelCaller } from "./agents/model-caller.js";
 import { runOutreach } from "./outreach/pipeline.js";
 import { forType, parseOutreachSettings, type OutreachSettings } from "./outreach/settings.js";
-import { awaitingCompanyCheck, countWaiting, PROSPECT_COLUMNS, saveCompanyCheck, toProspectRow } from "./outreach/store.js";
+import { awaitingCompanyCheck, countWaiting, PROSPECT_COLUMNS, purgeProspects, saveCompanyCheck, toProspectRow } from "./outreach/store.js";
 import type { Mailbox, MailCheck } from "./control/connectors/mailbox.js";
 import type { PlacesConnector } from "./control/connectors/places.js";
 import type { DirectReader } from "./control/connectors/direct-read.js";
@@ -141,6 +141,8 @@ export interface Runtime {
   requeueUnsent(since: Date): Promise<number>;
   /** The daily clear of words kept past their time: call notes and finished follow-up emails (0020). */
   clearOldNotes(): Promise<{ notes: number; emails: number }>;
+  /** The daily clear of businesses set aside 90 days ago that he never dealt with (store.purgeProspects). Returns how many. */
+  purgeOldProspects(): Promise<number>;
   /**
    * At start: close every run left "running" by a process that is no longer there, as failed with the reason
    * interrupted_by_restart. `restart` names the pipeline rooms whose run was cut off and has not already been
@@ -1280,5 +1282,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, putBack: putBackOf, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, listPlans: listPlansOf, requestPlan, ask: instructions.ask, listInstructions, decideInstruction: instructions.decide, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()), clearOldNotes: () => clearOldNotes(gatewayDb, tenantId, options.keepNotesMonths ?? DEFAULT_KEEP_NOTES_MONTHS, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, putBack: putBackOf, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, listPlans: listPlansOf, requestPlan, ask: instructions.ask, listInstructions, decideInstruction: instructions.decide, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()), clearOldNotes: () => clearOldNotes(gatewayDb, tenantId, options.keepNotesMonths ?? DEFAULT_KEEP_NOTES_MONTHS, clock()), purgeOldProspects: () => purgeProspects(gatewayDb, { tenantId }, clock()) };
 }

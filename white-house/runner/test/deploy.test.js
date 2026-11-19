@@ -18,7 +18,8 @@ import { toPlace } from "../dist/control/connectors/places.js";
 import { exportConfig } from "../dist/export-config.js";
 import { changeOutreachSettings } from "../dist/outreach/admin.js";
 import { ENQUIRY_ACTION, ENQUIRY_CAP } from "../dist/outreach/enquiries.js";
-import { addSuppression } from "../dist/outreach/store.js";
+import { addSuppression, recordProspect } from "../dist/outreach/store.js";
+import { CALL_LIST_REASON } from "../dist/outreach/calls.js";
 import { createScheduler } from "../dist/scheduler.js";
 import { createRunnerServer } from "../dist/server.js";
 import { serverEnv } from "../dist/start.js";
@@ -361,6 +362,23 @@ test("export-config: the configuration in force and the suppressions of business
   // it is exactly what the bootstrap accepts (the test world's own dummy action aside, which the real runner does not have)
   const forServer = { ...out, config: out.config.filter((c) => !(c.kind === "rung" && c.key.startsWith("dummy."))) };
   assert.equal(parseCarriedConfig(encode(forServer)).config.length, forServer.config.length);
+});
+
+test("export-config: a hold the owner lifted by putting the business back is not carried; one he did not lift is", async () => {
+  const x = await makeHouse(h, { outreach: { budget: 5 }, server: false });
+  open.push(x);
+  const now = new Date("2026-11-17T09:00:00Z");
+  await recordProspect(h.gatewayDb, { tenantId: x.w.tenantId, businessId: x.w.businessId, runId: null },
+    { name: "Fixture Back Dental", website: "https://www.fixture-back.example.test", postcode: "B1 1AA", area: "Fixtureton", signal: "hiring_front_desk", evidence: "Fixture advert", source_url: "https://jobs.example.test/fixture-back" }, { now });
+  const p = (await h.admin.query("select prospect_id from prospects where tenant_id = $1 and domain_key = 'fixture-back.example.test'", [x.w.tenantId])).rows[0];
+  const add = (value) => h.admin.query("insert into suppressions (tenant_id, business_id, kind, value_key, reason, source) values ($1, null, 'domain', $2, $3, 'manual') returning suppression_id", [x.w.tenantId, value, CALL_LIST_REASON]);
+  const lifted = (await add("fixture-back.example.test")).rows[0].suppression_id;
+  await add("fixture-still.example.test");
+  await h.admin.query("insert into call_outcomes (tenant_id, business_id, prospect_id, outcome, note, created_at) values ($1, $2, $3, 'not_interested', null, $4)", [x.w.tenantId, x.w.businessId, p.prospect_id, new Date(now.getTime() - 60_000)]);
+  await h.admin.query("insert into owner_put_backs (tenant_id, business_id, prospect_id, reason, lifted) values ($1, $2, $3, 'fixture: a mistake', $4)", [x.w.tenantId, x.w.businessId, p.prospect_id, [lifted]]);
+  const { blob, putBack } = await exportConfig(h.gatewayDb, x.w.tenantId, now);
+  assert.equal(putBack, 1);
+  assert.deepEqual(blob.suppressions.map((s) => s.value_key), ["fixture-still.example.test"]);
 });
 
 // ---- a restart in the middle of a run ----

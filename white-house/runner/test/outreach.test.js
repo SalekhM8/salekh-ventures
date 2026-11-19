@@ -639,6 +639,20 @@ test("a prospect filtered out more than 90 days ago is purged: details go, the k
   assert.equal(await purgeProspects(h.gatewayDb, { tenantId: x.w.tenantId }, new Date(x.w.clock.now().getTime() + 200 * DAY)), 0, "purged once");
 });
 
+test("the 90-day purge never touches a business he has dealt with or one that is held off", async () => {
+  const { x } = await outreachHouse();
+  await run(x);
+  const out = (await prospects(x)).filter((p) => p.stage === "filtered_out");
+  assert.equal(out.length, 2);
+  const [held, called] = out[0].domain_key ? out : [out[1], out[0]];
+  await addSuppression(h.gatewayDb, { tenantId: x.w.tenantId, businessId: null, kind: "domain", value: held.domain_key, reason: "fixture hold" });
+  await h.admin.query("insert into call_outcomes (tenant_id, business_id, prospect_id, outcome, note) values ($1, $2, $3, 'no_answer', null)", [x.w.tenantId, called.business_id, called.prospect_id]);
+  assert.equal(await purgeProspects(h.gatewayDb, { tenantId: x.w.tenantId }, new Date(x.w.clock.now().getTime() + 91 * DAY)), 0);
+  const after = await prospects(x);
+  assert.ok(after.filter((p) => p.stage === "filtered_out").every((p) => p.purged_at === null && p.name !== "(removed)"));
+  assert.ok((await h.admin.query("select count(*)::int as n from suppressions where kind = 'domain' and value_key = $1", [held.domain_key])).rows[0].n >= 1, "the hold stays");
+});
+
 test("weekly numbers: counts per stage for a date range", async () => {
   const { x } = await outreachHouse();
   await run(x);

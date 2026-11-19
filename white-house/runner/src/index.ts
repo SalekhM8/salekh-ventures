@@ -186,6 +186,10 @@ server.listen(port, host, () => {
       const clear = () => void runtime.clearOldNotes().then((c) => { if (c.notes + c.emails > 0) console.log(`old words cleared: ${c.notes} call notes, ${c.emails} follow-up emails`); }, (err) => console.error(`clearing old call notes failed: ${err instanceof Error ? err.name : "error"}`));
       setInterval(clear, 24 * 60 * 60_000).unref();
       setTimeout(clear, 5 * 60_000).unref();
+      // Once a day: businesses set aside more than 90 days ago, that he never called, emailed or held off, are cleared down.
+      const purge = () => void runtime.purgeOldProspects().then((n) => { if (n > 0) console.log(`old set-aside businesses cleared: ${n}`); }, (err) => console.error(`clearing old set-aside businesses failed: ${err instanceof Error ? err.name : "error"}`));
+      setInterval(purge, 24 * 60 * 60_000).unref();
+      setTimeout(purge, 7 * 60_000).unref();
       look();
     })();
   }
