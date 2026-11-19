@@ -5,7 +5,7 @@ import { actionTypes } from "./control/action-types.js";
 import { isUuid } from "./control/db.js";
 import { canonicalJson, hashPayload } from "./control/hash.js";
 import { defaultMigrationsDir, migrate } from "./migrate.js";
-import { adoptNewDefaults, DEFAULTS_VERSION, parseOutreachSettings, toStoredForm } from "./outreach/settings.js";
+import { adoptNewDefaults, BUILT_IN_TYPE_IDS, DEFAULTS_VERSION, parseOutreachSettings, toStoredForm } from "./outreach/settings.js";
 import { seed, type CarriedConfig } from "./seed.js";
 
 /**
@@ -254,6 +254,8 @@ async function bringOutreachSettingsUpToDate(client: pg.Client, tenantId: string
     }
     const next = adopted.value as { business_types: { id: string; enabled: boolean }[] };
     if (enabled) {
+      // A kind built into the code since these settings were stored is added to them, filled from its built-in rules.
+      for (const id of enabled) if (BUILT_IN_TYPE_IDS.includes(id) && !next.business_types.some((t) => t.id === id)) next.business_types.push({ id, enabled: true });
       const unknown = enabled.filter((id) => !next.business_types.some((t) => t.id === id));
       if (unknown.length > 0) throw new Error(`WH_OUTREACH_ENABLED_TYPES names a kind of business that is not in the settings: ${unknown.join(", ")}`);
       next.business_types = next.business_types.map((t) => ({ ...t, enabled: enabled.includes(t.id) }));

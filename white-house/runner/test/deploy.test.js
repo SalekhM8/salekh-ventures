@@ -226,6 +226,16 @@ test("bootstrap: two instances starting together set the database up once; a sec
   // the same slug under another id is refused, not quietly made into a second tenant
   await assert.rejects(boot({ tenantId: "11111111-2222-4333-8444-555555555555" }), /another id/);
   assert.equal((await counts()).tenants, 1);
+  // a kind built into the code after the settings were stored: named in the list, it is added, not refused
+  const stored = await current("setting", "outreach");
+  const without = { ...stored.value, business_types: stored.value.business_types.filter((t) => t.id !== "pharmacies") };
+  await bootRows(`insert into config_versions (tenant_id, business_id, kind, key, value, version, changed_by_kind, reason)
+    select tenant_id, business_id, kind, key, $2::jsonb, version + 1, 'system', 'fixture: stored before pharmacies existed' from config_versions
+    where tenant_id = $1 and kind = 'setting' and key = 'outreach' order by version desc limit 1`, [TENANT, JSON.stringify(without)]);
+  assert.equal((await boot({ enabledTypes: ["clinics", "pharmacies"] })).settingsUpdated, 1);
+  const added = (await current("setting", "outreach")).value.business_types;
+  assert.deepEqual(added.filter((t) => t.enabled).map((t) => t.id).sort(), ["clinics", "pharmacies"]);
+  await assert.rejects(boot({ enabledTypes: ["clinics", "no-such-kind"] }), /not in the settings: no-such-kind/);
 });
 
 test("the three logins: each a member of its own role and nothing else, with no powers of its own, and each held to what its role may do", async () => {
