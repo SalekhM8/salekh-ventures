@@ -26,6 +26,7 @@ import { decideApproval } from "./control/approvals.js";
 import { isUuid, type Db, type Tx } from "./control/db.js";
 import { emitEvent, type EventInput } from "./control/events.js";
 import { checkOutcome, listCalls, recordOutcome, type CallsOfProspect } from "./outreach/calls.js";
+import { createPlans, PLAN_OUTCOMES, type PlanView } from "./outreach/plans.js";
 import { checkRecipient, createFollowupConnector, createFollowups, DRAFT_OUTCOMES, FOLLOWUP_ACTION, type FollowupView } from "./outreach/followups.js";
 import { createGateway, type Gateway } from "./control/gateway.js";
 import { finishRun, startRun, tenantDay } from "./control/runs.js";
@@ -163,6 +164,10 @@ export interface Runtime {
   requestFollowup(prospectId: string, body: unknown): Promise<Answer<{ ok: true }>>;
   /** The owner's switch for follow-up emails: 2, ask me first; 3, send without asking. */
   setFollowupRung(roomId: string, body: unknown): Promise<Answer<{ rung: number }>>;
+  /** The Closer's newest plan for each business in one room, and which are being written. For Salekh only: nothing in a plan is sent. */
+  listPlans(roomId: string): Promise<Answer<{ plans: PlanView[]; making: string[] }>>;
+  /** "Make a plan" on a card: the Closer writes one for that business, in the background. */
+  requestPlan(prospectId: string): Promise<Answer<{ ok: true }>>;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -873,6 +878,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   const track = (key: string, work: Promise<void>) => { inFlight.set(key, work.finally(() => inFlight.delete(key))); };
 
+  // ---- the Closer: a plan before the next call (never sent to anyone) ----------
+  const plans = createPlans({
+    db: gatewayDb, tenantId, clock, model: options.model ?? null,
+    apiKey: async () => {
+      const tenant = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select slug from tenants where tenant_id = wh_tenant()")).rows[0]);
+      return options.apiKeyFor((tenant?.slug as string | null) ?? "") ?? null;
+    },
+    whRoot: options.whRoot, usdToGbp: options.usdToGbp, settingsOf: (businessId) => settingsOf(businessId), changed,
+  });
+
   const recordCallOutcome: Runtime["recordCallOutcome"] = async (prospectId, body) => {
     const checked = checkOutcome(body);
     if (!checked.ok) return { status: 422, reason: checked.reason };
@@ -888,6 +903,28 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!standby && checked.note && (DRAFT_OUTCOMES as readonly string[]).includes(checked.outcome)) {
       followups.draftLater(prospectId, { outcome: checked.outcome as (typeof DRAFT_OUTCOMES)[number], note: checked.note, to: to.to }, track);
     }
+    // Interested or meeting booked: the Closer writes a plan for the next call (note or not).
+    if (!standby && (PLAN_OUTCOMES as readonly string[]).includes(checked.outcome)) plans.makeLater(prospectId, "outcome", track);
+    return { status: 200, ok: true };
+  };
+
+  const listPlansOf: Runtime["listPlans"] = async (roomId) => {
+    const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
+    if (!room) return { status: 404 };
+    return { status: 200, ...(await plans.list(room.businessId)) };
+  };
+  const requestPlan: Runtime["requestPlan"] = async (prospectId) => {
+    if (standby) return { status: 409, reason: "standby" };
+    if (!isUuid(prospectId)) return { status: 404 };
+    const latest = await gatewayDb.tx(tenantId, async (tx) => {
+      const p = (await tx.query("select 1 from prospects where prospect_id = $1 and purged_at is null", [prospectId])).rows[0];
+      if (!p) return null;
+      return ((await tx.query("select outcome from call_outcomes where prospect_id = $1 order by created_at desc, call_outcome_id desc limit 1", [prospectId])).rows[0] ?? {}) as { outcome?: string };
+    });
+    if (latest === null) return { status: 404 };
+    if (latest.outcome === "not_interested") return { status: 409, reason: "not_interested" };
+    plans.makeLater(prospectId, "asked", track);
+    changed();
     return { status: 200, ok: true };
   };
 
@@ -1191,5 +1228,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, listPlans: listPlansOf, requestPlan, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

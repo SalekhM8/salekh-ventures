@@ -462,6 +462,16 @@ export const followupSchema = z.object({
   body: z.string().describe('The whole email, from the greeting to the sign-off "Salekh Mahmood, Salekh Ventures" on its own last line.'),
 });
 
+export const planSchema = z.object({
+  opening: z.string().describe("Two or three sentences Salekh can say to open the call. No figures in pounds, no percentages."),
+  setup: z.array(z.string()).describe("Three to five short lines, each one job we would set up for them, said as what we would do once connected."),
+  objections: z.array(z.object({
+    objection: z.string().describe("Something this business is likely to say."),
+    answer: z.string().describe("A plain answer Salekh can give. No figures in pounds, no percentages."),
+  })).describe("Three to five likely objections, each with its answer."),
+  next_step: z.string().describe("One sentence: what to ask for at the end of the call."),
+});
+
 /** Every schema sent to the API as a structured output, with the model that is sent it. `npm run check-schemas` tries each for real. */
 export const STAGE_SCHEMAS = {
   find: { schema: findSchema, model: "claude-haiku-5-5" },
@@ -470,4 +480,5 @@ export const STAGE_SCHEMAS = {
   reply: { schema: replySchema, model: "claude-haiku-5-5" },
   draft: { schema: draftSchema, model: "claude-sonnet-5-5" },
   followup: { schema: followupSchema, model: "claude-sonnet-5-5" },
+  plan: { schema: planSchema, model: "claude-sonnet-5-5" },
 } as const;

@@ -94,7 +94,7 @@ test("a recipient is an address that looks like one, given by Salekh; figures ne
   const { facts, rules } = followupFacts({ business: "Fixture Clinic", area: "Fixtureton", kind: "clinics", sells: "implants from £2,750", contactName: null, contactRole: null, recipientName: null, outcome: "interested", note: NOTE, test: null, rival: null });
   assert.ok(!/£|%|2,750|500|\b30\b/.test(facts), facts);
   assert.deepEqual(rules.mustInclude, []);
-  assert.deepEqual(Object.keys(STAGE_SCHEMAS).at(-1), "followup");
+  assert.ok(Object.keys(STAGE_SCHEMAS).includes("followup"));
   // the owner's mailbox: its own token, and never the test mailbox's address
   const base = { OWNER_MAIL_ADDRESS: "hello@fixture-owner.example.test", GMAIL_OAUTH_CLIENT_ID: "id", GMAIL_OAUTH_CLIENT_SECRET: "secret" };
   assert.equal(ownerMailboxFromEnv({}).mailbox, null);

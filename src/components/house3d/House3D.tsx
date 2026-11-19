@@ -1049,6 +1049,7 @@ export default function House3D({
                       loadCalls={live.calls}
                       saveOutcome={live.recordOutcome}
                       followupApi={{ load: live.followups, edit: live.editFollowup, decide: live.decideFollowup, request: live.requestFollowup, setRung: live.setFollowupRung }}
+                      planApi={{ load: live.plans, request: live.requestPlan }}
                     /> : <Markdown text={viewing.body} />;
                 })()}
               </div>

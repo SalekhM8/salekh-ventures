@@ -55,6 +55,9 @@ export type Followup = {
 };
 export type FollowupList = { followups: Followup[]; rung: number; ownerMailbox: { configured: boolean; address: string | null }; drafting: string[] };
 export type FollowupEdit = { subject?: string; body?: string; to?: { name?: string; email: string } | null; copied?: true };
+/** The Closer's one-page plan for the next call. For Salekh only: nothing in it is sent. */
+export type Plan = { id: string; prospectId: string; business: string; trigger: string; body: string; createdAt: string };
+export type PlanList = { plans: Plan[]; making: string[] };
 /** What came back: the follow-up's new state, or why not. */
 export type FollowupAnswer = { ok: true; status?: string; reason?: string; followup?: Followup } | { ok: false; reason: string };
 
@@ -248,9 +251,20 @@ export function useLiveHouse(enabled = true) {
   const requestFollowup = useCallback(async (prospectId: string) => answer(await call(`v1/prospects/${encodeURIComponent(prospectId)}/followup`, {})), []);
   const setFollowupRung = useCallback(async (roomId: string, rung: 2 | 3) => answer(await call(`v1/rooms/${toApi(roomId)}/followup-rung`, { rung })), []);
 
+  /** The Closer's newest plan for each business in one room, and which are being written. */
+  const plans = useCallback(async (roomId: string): Promise<PlanList | null> => {
+    const r = await call(`v1/rooms/${toApi(roomId)}/plans`);
+    return r.ok && Array.isArray(r.json.plans) ? (r.json as unknown as PlanList) : null;
+  }, []);
+  /** "Make a plan": returns null when asked, or why not. */
+  const requestPlan = useCallback(async (prospectId: string): Promise<string | null> => {
+    const r = await call(`v1/prospects/${encodeURIComponent(prospectId)}/plan`, {});
+    return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
+  }, []);
+
   return {
     connected, stopped: house?.killSwitch.global ?? false, health: house?.health ?? [], sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome,
-    followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung,
+    followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung, plans, requestPlan,
   };
 }
 
