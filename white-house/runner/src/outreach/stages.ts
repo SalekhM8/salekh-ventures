@@ -462,6 +462,23 @@ export const followupSchema = z.object({
   body: z.string().describe('The whole email, from the greeting to the sign-off "Salekh Mahmood, Salekh Ventures" on its own last line.'),
 });
 
+/**
+ * The Chief of Staff reading one instruction from the owner. No nulls: "" is "does not apply". What it may change is
+ * the closed list in chief/instructions.ts, checked again by code whatever this says.
+ */
+export const CHIEF_CHANGES = ["none", "followups_ask_first", "followups_send_without_asking", "pause_floor", "resume_floor", "kind_off", "kind_on", "add_place", "remove_place"] as const;
+export const chiefSchema = z.object({
+  restated: z.string(),
+  department: z.enum(["outreach", "engineering", "research", "data", "marketing"]),
+  kind: z.enum(["setting", "engineering", "question"]),
+  change: z.enum(CHIEF_CHANGES),
+  floor: z.string(),
+  kind_id: z.string(),
+  place: z.string(),
+  question: z.string(),
+  ticket: z.string(),
+});
+
 /** Every schema sent to the API as a structured output, with the model that is sent it. `npm run check-schemas` tries each for real. */
 export const STAGE_SCHEMAS = {
   find: { schema: findSchema, model: "claude-haiku-5-5" },
@@ -470,4 +487,5 @@ export const STAGE_SCHEMAS = {
   reply: { schema: replySchema, model: "claude-haiku-5-5" },
   draft: { schema: draftSchema, model: "claude-sonnet-5-5" },
   followup: { schema: followupSchema, model: "claude-sonnet-5-5" },
+  chief: { schema: chiefSchema, model: "claude-sonnet-5-5" },
 } as const;

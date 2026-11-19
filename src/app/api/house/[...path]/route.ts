@@ -19,6 +19,8 @@ const ALLOWED = [
   /^v1\/followups\/[\w-]+$/,
   /^v1\/followups\/[\w-]+\/decision$/,
   /^v1\/ask$/,
+  /^v1\/instructions$/,
+  /^v1\/instructions\/[\w-]+$/,
 ];
 
 async function forward(request: Request, path: string[]) {

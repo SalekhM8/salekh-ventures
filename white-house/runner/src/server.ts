@@ -138,8 +138,18 @@ export function createRunnerServer(options: ServerOptions = {}): Server {
         const r = await rt.acknowledge(b as string);
         return r.status === 200 ? send(res, 200, { ok: true }) : fail(r);
       }
-      case "POST ask":
-        return send(res, 501, { reason: "not_built" });
+      case "POST ask": {
+        const r = await rt.ask(body);
+        return r.status === 202 ? send(res, 202, { id: r.id }) : fail(r);
+      }
+      case "GET instructions": {
+        const r = await rt.listInstructions();
+        return r.status === 200 ? send(res, 200, { instructions: r.instructions }) : fail(r);
+      }
+      case "POST instructions/:id": {
+        const r = await rt.decideInstruction(b as string, body);
+        return r.status === 200 ? send(res, 200, { instruction: r.instruction }) : fail(r);
+      }
       default:
         return send(res, 404, { error: "not_found" });
     }

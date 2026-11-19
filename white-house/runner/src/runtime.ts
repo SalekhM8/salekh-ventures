@@ -6,7 +6,8 @@ import type { AgentDriver, DriverResult } from "./agents/driver.js";
 import { prepareSession, type ToolCallLog } from "./agents/session.js";
 import type { MetricRow, ToolBackend } from "./agents/tools.js";
 import { actionTypes as defaultActionTypes, createActionTypeRegistry, followupAction, type ActionType, type ActionTypeRegistry } from "./control/action-types.js";
-import { engageKillSwitch, readCurrent, resumeKillSwitch } from "./control/config.js";
+import { engageKillSwitch, readCurrent, readRung, resumeKillSwitch } from "./control/config.js";
+import { createInstructions, type InstructionView, type OutreachFloor } from "./chief/instructions.js";
 import type { Connector } from "./control/connectors/connector.js";
 import { createDummyConnector } from "./control/connectors/dummy.js";
 import type { ReachConnector } from "./control/connectors/agent-reach.js";
@@ -163,6 +164,12 @@ export interface Runtime {
   requestFollowup(prospectId: string, body: unknown): Promise<Answer<{ ok: true }>>;
   /** The owner's switch for follow-up emails: 2, ask me first; 3, send without asking. */
   setFollowupRung(roomId: string, body: unknown): Promise<Answer<{ rung: number }>>;
+  /** Salekh tells the Chief of Staff something (or answers its question). Stored at once, read in the background. */
+  ask(body: unknown): Promise<Answer<{ id: string }>>;
+  /** What he has told the Chief of Staff lately, and where each one is. His own words, on purpose. */
+  listInstructions(): Promise<Answer<{ instructions: InstructionView[] }>>;
+  /** His yes or no to a change the Chief of Staff proposed. */
+  decideInstruction(id: string, body: unknown): Promise<Answer<{ instruction: InstructionView }>>;
   /** Resolves when no run is in progress in this process, and nothing is waiting to be sent. */
   idle(): Promise<void>;
 }
@@ -922,6 +929,33 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return followups.setRung(room.businessId, body);
   };
 
+  // ---- the Chief of Staff: instructions in his own words ------------------------------
+
+  const outreachFloors = async (): Promise<OutreachFloor[]> => {
+    const rows = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select business_id, slug, name from businesses where status = 'active' and 'outreach' = any (departments) order by slug")).rows);
+    return Promise.all(rows.map(async (r) => {
+      const s = await settingsOf(r.business_id as string);
+      return { businessId: r.business_id as string, slug: r.slug as string, name: r.name as string, kinds: s.business_types.map((t) => ({ id: t.id, name: t.name, enabled: t.enabled })), places: [...s.areas] };
+    }));
+  };
+  const instructions = createInstructions({
+    db: gatewayDb, uiDb, tenantId, clock, model: options.model ?? null, standby,
+    apiKey: async () => {
+      const tenant = await gatewayDb.tx(tenantId, async (tx) => (await tx.query("select slug from tenants where tenant_id = wh_tenant()")).rows[0]);
+      return options.apiKeyFor((tenant?.slug as string | null) ?? "") ?? null;
+    },
+    whRoot: options.whRoot, usdToGbp: options.usdToGbp, floors: outreachFloors,
+    ownerId: () => gatewayDb.tx(tenantId, ownerId), changed, track,
+    // Only ever down to "ask me first": from rung 1 (nothing sent) it stays where it is, so this can never raise it.
+    followupsAskFirst: async (businessId, reason) => {
+      const current = await gatewayDb.tx(tenantId, (tx) => readRung(tx, businessId, FOLLOWUP_ACTION));
+      if (Math.min(current, followupAction.maxRung) <= 2) return { ok: true };
+      const r = await followups.setRung(businessId, { rung: 2, reason });
+      return r.status === 200 ? { ok: true } : { ok: false, reason: "reason" in r ? r.reason : "not_found" };
+    },
+  });
+  const listInstructions: Runtime["listInstructions"] = async () => ({ status: 200, ...(await instructions.list()) });
+
   const listCallsOf: Runtime["listCalls"] = async (roomId) => {
     const room = await gatewayDb.tx(tenantId, (tx) => findRoom(tx, roomId));
     if (!room) return { status: 404 };
@@ -1191,5 +1225,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     while (inFlight.size > 0) await Promise.all([...inFlight.values()]);
   }
 
-  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
+  return { gateway, house, getOutput, scoreOutput, answerApproval, setKillSwitch, startRun: startRunFor, acknowledge, idle, listApprovals, decideBatch, collectReplies: collect, listSent, listReplies: listRepliesOf, recordCallOutcome, listCalls: listCallsOf, listFollowups: listFollowupsOf, editFollowup, decideFollowup, requestFollowup, setFollowupRung, ask: instructions.ask, listInstructions, decideInstruction: instructions.decide, closeInterrupted, scoreDue: scoreDueNow, clearStop: (day) => clearStop(gatewayDb, tenantId, day, clock()), redraftCards, sendDue: kickSender, checkMail, requeueUnsent: (since) => requeueUnsent(gatewayDb, tenantId, since, clock()) };
 }

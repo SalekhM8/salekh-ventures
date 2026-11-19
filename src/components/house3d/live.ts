@@ -53,6 +53,23 @@ export type Followup = {
   copiedAt: string | null;
   reason: string | null;
 };
+/** One thing Salekh told the Chief of Staff, and where it is now. His own words: kept in memory only. */
+export type InstructionStatus = "reading" | "proposed" | "done" | "not_done" | "waiting_engineering" | "needs_answer" | "answered";
+export type Instruction = {
+  id: string;
+  at: string;
+  said: string;
+  answers: string | null;
+  status: InstructionStatus;
+  restated: string | null;
+  department: string | null;
+  kind: string | null;
+  change: string | null;
+  question: string | null;
+  note: string | null;
+  updatedAt: string;
+};
+
 export type FollowupList = { followups: Followup[]; rung: number; ownerMailbox: { configured: boolean; address: string | null }; drafting: string[] };
 export type FollowupEdit = { subject?: string; body?: string; to?: { name?: string; email: string } | null; copied?: true };
 /** What came back: the follow-up's new state, or why not. */
@@ -248,9 +265,25 @@ export function useLiveHouse(enabled = true) {
   const requestFollowup = useCallback(async (prospectId: string) => answer(await call(`v1/prospects/${encodeURIComponent(prospectId)}/followup`, {})), []);
   const setFollowupRung = useCallback(async (roomId: string, rung: 2 | 3) => answer(await call(`v1/rooms/${toApi(roomId)}/followup-rung`, { rung })), []);
 
+  /** What Salekh has told the Chief of Staff lately. */
+  const instructions = useCallback(async (): Promise<Instruction[] | null> => {
+    const r = await call("v1/instructions");
+    return r.ok && Array.isArray(r.json.instructions) ? (r.json.instructions as Instruction[]) : null;
+  }, []);
+  /** Tell the Chief of Staff something, or answer its question. Returns null when it was taken, or why not. */
+  const instruct = useCallback(async (text: string, answers: string | null): Promise<string | null> => {
+    const r = await call("v1/ask", answers ? { text, answers } : { text });
+    return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
+  }, []);
+  const decideInstruction = useCallback(async (id: string, decision: "yes" | "no"): Promise<string | null> => {
+    const r = await call(`v1/instructions/${encodeURIComponent(id)}`, { decision });
+    await refresh();
+    return r.ok ? null : String(r.json.reason ?? r.json.error ?? `error ${r.status}`);
+  }, [refresh]);
+
   return {
     connected, stopped: house?.killSwitch.global ?? false, health: house?.health ?? [], sim, couriers, removeCourier, decide, acknowledge, run, setStop, score, output, approvals, decideMany, calls, recordOutcome,
-    followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung,
+    followups, editFollowup, decideFollowup, requestFollowup, setFollowupRung, instructions, instruct, decideInstruction,
   };
 }
 
