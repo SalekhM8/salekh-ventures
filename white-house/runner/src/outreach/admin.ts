@@ -49,7 +49,7 @@ export async function readOutreachSettings(db: Db, tenantId: string, roomId: str
   });
 }
 
-const touchesSetting = (c: SettingsChange) => c.areasPerRun !== undefined || c.batchSize !== undefined || Boolean(c.adoptNewDefaults || c.excludeGroups?.length || c.includeGroups?.length || c.enableTypes?.length || c.disableTypes?.length);
+const touchesSetting = (c: SettingsChange) => c.areasPerRun !== undefined || c.batchSize !== undefined || Boolean(c.adoptNewDefaults || c.excludeGroups?.length || c.includeGroups?.length || c.enableTypes?.length || c.disableTypes?.length || c.addAreas?.length || c.removeAreas?.length);
 
 export interface SettingsChange {
   areasPerRun?: number;
@@ -76,10 +76,13 @@ export interface SettingsChange {
   disableTypes?: string[];
   /** Which kind the group changes above apply to. Default: clinics. */
   typeId?: string;
+  /** Towns and cities to add to the places searched, and to take off it. */
+  addAreas?: string[];
+  removeAreas?: string[];
 }
 
 /** Change the settings as a new version of config, recorded against the tenant's owner. Returns what is now in force. */
-export async function changeOutreachSettings(db: Db, tenantId: string, roomId: string, change: SettingsChange): Promise<RoomSettings> {
+export async function changeOutreachSettings(db: Db, tenantId: string, roomId: string, change: SettingsChange, reason = "changed from the command line"): Promise<RoomSettings> {
   const room = await roomAndOwner(db, tenantId, roomId);
   const current = await db.tx(tenantId, async (tx) => ({
     setting: (await readCurrent(tx, { businessId: room.businessId, kind: "setting", key: room.department }))?.value ?? {},
@@ -101,6 +104,12 @@ export async function changeOutreachSettings(db: Db, tenantId: string, roomId: s
       else typeById(id).enabled = on;
     }
   }
+  if (change.addAreas?.length || change.removeAreas?.length) {
+    const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+    const kept = (next.areas as string[]).filter((a) => !(change.removeAreas ?? []).some((x) => same(x, a)));
+    const added = (change.addAreas ?? []).map((a) => a.trim()).filter((a) => a && !kept.some((k) => same(k, a)));
+    next.areas = [...kept, ...added];
+  }
   if (change.areasPerRun !== undefined) next.areas_per_run = change.areasPerRun;
   if (change.batchSize !== undefined) next.find_per_run = change.batchSize;
   if (change.excludeGroups?.length || change.includeGroups?.length) {
@@ -115,18 +124,18 @@ export async function changeOutreachSettings(db: Db, tenantId: string, roomId: s
   const settingChanged = canonicalJson(next) !== canonicalJson(toStoredForm(before)) || (touchesSetting(change) && canonicalJson(next) !== canonicalJson(current.setting));
   if (settingChanged) {
     parseOutreachSettings(next); // refuse nonsense before it is stored
-    await setConfig(db, { tenantId, businessId: room.businessId, kind: "setting", key: room.department, value: next, memberId: room.ownerId, reason: "changed from the command line" });
+    await setConfig(db, { tenantId, businessId: room.businessId, kind: "setting", key: room.department, value: next, memberId: room.ownerId, reason });
   }
   if (change.dailyAt !== undefined) {
     const schedule: Record<string, unknown> = { ...current.schedule };
     if (change.dailyAt === "off") delete schedule.daily_at;
     else if (/^([01]\d|2[0-3]):[0-5]\d$/.test(change.dailyAt)) schedule.daily_at = change.dailyAt;
     else throw new ControlError("invalid_request", "the daily time must be written HH:MM, or off");
-    await setConfig(db, { tenantId, businessId: room.businessId, kind: "schedule", key: room.department, value: schedule, memberId: room.ownerId, reason: "changed from the command line" });
+    await setConfig(db, { tenantId, businessId: room.businessId, kind: "schedule", key: room.department, value: schedule, memberId: room.ownerId, reason });
   }
   if (change.enquiriesPerDay !== undefined) {
     if (!Number.isInteger(change.enquiriesPerDay) || change.enquiriesPerDay < 0 || change.enquiriesPerDay > 500) throw new ControlError("invalid_request", "the daily allowance must be a whole number from 0 to 500");
-    await setConfig(db, { tenantId, businessId: room.businessId, kind: "cap", key: ENQUIRY_CAP, value: { limit: change.enquiriesPerDay }, memberId: room.ownerId, reason: "changed from the command line" });
+    await setConfig(db, { tenantId, businessId: room.businessId, kind: "cap", key: ENQUIRY_CAP, value: { limit: change.enquiriesPerDay }, memberId: room.ownerId, reason });
   }
   if (change.allowEnquiries) {
     const rung = await db.tx(tenantId, (tx) => readRung(tx, room.businessId, ENQUIRY_ACTION));

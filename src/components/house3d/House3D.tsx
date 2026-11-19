@@ -10,6 +10,7 @@ import { Interior } from "./Interior";
 import { FloorScene, ROOM_W, floorCamera, floorPan } from "./FloorScene";
 import { RUN_REFUSED, useLiveHouse } from "./live";
 import { Approvals } from "./Approvals";
+import { Instructions } from "./Instructions";
 import { CallList, parseShortlist } from "./CallList";
 import { Markdown } from "./Markdown";
 import { CATALOGUE } from "@/lib/agents";
@@ -270,6 +271,10 @@ export default function House3D({
   const [placesOpen, setPlacesOpen] = useState(false);
   const [chat, setChat] = useState<Msg[]>([]);
   const [draft, setDraft] = useState("");
+  // Live: what he types goes to the Chief of Staff as an instruction. `answering` is the question it answers.
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [sentTick, setSentTick] = useState(0);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [talking, setTalking] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>({});
   // Which finished pieces of work Salekh has opened, kept on this device. Unopened work is "new for you".
@@ -411,6 +416,21 @@ export default function House3D({
     const t = setTimeout(() => setTalking(false), 2600);
     return () => clearTimeout(t);
   }, [talking, chat]);
+
+  const instruct = async (q: string) => {
+    const text = q.trim();
+    if (!text) return;
+    setSnap("full");
+    setSendError(null);
+    const why = await live.instruct(text, answering);
+    if (why) {
+      setSendError(why === "not_waiting_for_an_answer" ? "That question has already been answered." : "That didn't reach the Chief of Staff. Try again.");
+      return;
+    }
+    setDraft("");
+    setAnswering(null);
+    setSentTick((n) => n + 1);
+  };
 
   const ask = (q: string) => {
     const text = q.trim();
@@ -1097,6 +1117,9 @@ export default function House3D({
               </div>
             ) : (
               <div ref={chatBox} data-lenis-prevent className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 pb-4 md:px-6">
+                {isLive && (
+                  <Instructions load={live.instructions} decide={live.decideInstruction} refreshKey={sentTick} answering={answering} onAnswer={setAnswering} />
+                )}
                 {chat.map((m) =>
                   m.from === "you" ? (
                     <div key={m.id} className="self-end rounded-2xl px-4 py-2.5" style={{ background: C.ink, color: C.surface, font: `500 15px/1.45 ${SANS}`, maxWidth: "85%" }}>
@@ -1139,7 +1162,8 @@ export default function House3D({
                 className="mt-2 flex gap-2 md:mt-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  ask(draft);
+                  if (isLive) void instruct(draft);
+                  else ask(draft);
                 }}
               >
                 <label htmlFor="ask-chief" className="sr-only">
@@ -1150,18 +1174,19 @@ export default function House3D({
                   id="ask-chief"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  placeholder={lowPower ? "Ask the Chief of Staff" : "Ask about a floor, a department, or what needs you"}
+                  placeholder={isLive ? (answering ? "Your answer" : "Tell me what to change") : lowPower ? "Ask the Chief of Staff" : "Ask about a floor, a department, or what needs you"}
                   enterKeyHint="send"
                   className="min-h-12 min-w-0 flex-1 rounded-full px-4 outline-none focus:ring-2 focus:ring-[#1a0e0b]"
                   style={{ background: C.cream, color: C.ink, font: `400 16px/1 ${SANS}`, border: `1.5px solid ${C.blush}`, WebkitTapHighlightColor: "transparent" }}
                 />
                 <button type="submit" style={btnPrimary}>
-                  Ask
+                  {isLive ? "Send" : "Ask"}
                 </button>
               </form>
+              {sendError && <p className="mt-2" style={{ font: `500 13px/1.4 ${SANS}`, color: "#a4561c" }}>{sendError}</p>}
               <p className={lowPower ? "hidden" : "mt-2.5"} style={{ font: `400 11.5px/1.45 ${SANS}`, color: "#7a6a62" }}>
                 {isLive
-                  ? "The Chief of Staff agent is not built yet. For now these answers are simple rules over the live state."
+                  ? "The quick questions are answered from the live state. Anything you type goes to the Chief of Staff, and no setting changes until you say yes."
                   : "Prototype: these answers are worked out from the simulation by simple rules. The real Chief of Staff answers from the log."}
               </p>
             </div>

@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import * as control from "../dist/control.js";
 
-// WH_TEST_DB lets two checkouts test side by side on one Postgres without dropping each other's database.
-export const TEST_DB = process.env.WH_TEST_DB ?? "wh_test";
+// WH_TEST_DB: a separate database (and test login roles) for a second copy of the repository running its tests at once.
+export const TEST_DB = /^[a-z_][a-z0-9_]{0,40}$/.test(process.env.WH_TEST_DB ?? "") ? process.env.WH_TEST_DB : "wh_test";
 export const TEST_ROLE_PASSWORD = "wh-test-only";
 export const TEST_CAP_LIMIT_UNITS = 10; // fixture: dummy units allowed per day
 export const TEST_DAILY_BUDGET_GBP = 1; // fixture: department budget per day

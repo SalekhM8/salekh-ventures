@@ -194,4 +194,19 @@ Clears a `failed` state once Salekh has looked. Answers `{ "ok": true }`.
 
 ## POST /v1/ask
 
-Body `{ "question": string }`. The Chief of Staff. Not built yet: answers 501 `{ "reason": "not_built" }`.
+Body `{ "text": string, "answers": "instruction id, optional" }`. Salekh tells the Chief of Staff something in his own words (1 to 1000 characters), or answers a question it asked (`answers`: an instruction whose status is `needs_answer`, else 409 `not_waiting_for_an_answer`). Stored at once and answered 202 `{ "id" }`; one model call reads it in the background (the kill switch and the `chief-of-staff` daily budget apply, as to any run). Code then decides, from runner/src/chief/instructions.ts:
+
+- a setting from the closed list (follow-ups ask first, pause a floor, a kind of business on or off, a place added or taken off): `proposed`. Nothing changes until his yes, below.
+- "send follow-ups without asking" or "start a stopped floor": `not_done`, with where his own switch is. The Chief of Staff can never raise a rung or lift a stop.
+- a change to code or behaviour: `waiting_engineering`, a ticket for a Claude Code session (`npm run tickets`, and `npm run tickets -- done <id> "<note>"`).
+- unclear: `needs_answer`, with one question.
+
+**Returns his own words on purpose** (here and below): nothing he typed is in `/v1/house` or in any event. A standby answers 409 `standby`.
+
+## GET /v1/instructions
+
+The last 30, newest first: `{ "instructions": [{ "id", "at", "said", "answers", "status", "restated", "department", "kind", "change", "question", "note", "updatedAt" }] }`. `status` is one of `reading`, `proposed`, `done`, `not_done`, `waiting_engineering`, `needs_answer`, `answered`. `change` is the change in plain words, when one is proposed or was made.
+
+## POST /v1/instructions/:id
+
+Body `{ "decision": "yes" | "no" }`, for a `proposed` change only (else 409 `not_waiting_for_a_yes`). A yes makes the change through the owner's own code path (the UI's role, in the owner's name, with the reason "asked for through the Chief of Staff"), checked again against the closed list. Answers `{ "instruction" }`.

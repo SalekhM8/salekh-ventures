@@ -22,7 +22,8 @@
     "bootstrap": "node dist/bootstrap.js",
     "reset-attempts": "node dist/outreach/reset-attempts-cli.js",
     "suppress": "node dist/outreach/admin-cli.js suppress",
-    "outreach-settings": "node dist/outreach/admin-cli.js settings"
+    "outreach-settings": "node dist/outreach/admin-cli.js settings",
+    "tickets": "node dist/chief/tickets-cli.js"
   },
   "devDependencies": {
     "@types/mailparser": "3.9.0",

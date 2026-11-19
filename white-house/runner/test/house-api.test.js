@@ -384,10 +384,10 @@ test("run: 409 already_running while that room has a run in progress", async () 
 
 // ---- ask, and anything else ----
 
-test("ask is not built: 501. Unknown routes: 404", async () => {
+test("ask needs its text (the Chief of Staff, in chief.test.js). Unknown routes: 404", async () => {
   const x = await house();
   const res = await x.call("POST", "/v1/ask", { question: "Fixture question" });
-  assert.deepEqual([res.status, res.body], [501, { reason: "not_built" }]);
+  assert.deepEqual([res.status, res.body], [422, { reason: "text must be 1 to 1000 characters" }]);
   assert.equal((await x.call("GET", "/v1/nothing")).status, 404);
   assert.equal((await x.call("DELETE", "/v1/house")).status, 404);
   const bad = await fetch(`${x.base}/v1/kill-switch`, { method: "POST", headers: { authorization: `Bearer ${TEST_TOKEN}` }, body: "{not json" });

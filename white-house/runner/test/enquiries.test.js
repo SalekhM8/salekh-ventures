@@ -1131,7 +1131,7 @@ test("the API's own error is kept for a refused request, and for nothing else; n
 
   // The analysis schema once grew too large for the API to compile, through nullable and optional fields.
   // This cannot prove the API accepts a schema (npm run check-schemas does that); it stops the known cause coming back.
-  assert.deepEqual(Object.keys(STAGE_SCHEMAS), ["find", "analyse", "enquiry", "reply", "draft", "followup", "plan"]);
+  assert.deepEqual(Object.keys(STAGE_SCHEMAS), ["find", "analyse", "enquiry", "reply", "draft", "followup", "plan", "chief"]);
   const planShape = JSON.stringify(STAGE_SCHEMAS.plan.schema.toJSONSchema?.() ?? {});
   assert.ok(!/"anyOf"|"oneOf"|"null"/.test(planShape), "no nullable or union field in the plan schema");
   const shape = JSON.stringify(STAGE_SCHEMAS.analyse.schema.toJSONSchema?.() ?? {});
